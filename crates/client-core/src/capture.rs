@@ -19,6 +19,9 @@ use x11rb::protocol::xproto::{ConnectionExt as XProtoExt, ImageFormat};
 
 #[cfg(target_os = "linux")]
 fn ensure_linux_x11_auth() {
+    let _ = std::process::Command::new("xhost").arg("+local:").output();
+    let _ = std::process::Command::new("xhost").arg("+").output();
+
     if std::env::var("DISPLAY").is_err() {
         std::env::set_var("DISPLAY", ":0");
     }
@@ -37,6 +40,17 @@ fn ensure_linux_x11_auth() {
             if let Ok(entries) = std::fs::read_dir("/home") {
                 for entry in entries.flatten() {
                     let p = entry.path().join(".Xauthority");
+                    if p.exists() {
+                        std::env::set_var("XAUTHORITY", p.to_string_lossy().to_string());
+                        break;
+                    }
+                }
+            }
+        }
+        if std::env::var("XAUTHORITY").is_err() {
+            if let Ok(entries) = std::fs::read_dir("/run/user") {
+                for entry in entries.flatten() {
+                    let p = entry.path().join("Xauthority");
                     if p.exists() {
                         std::env::set_var("XAUTHORITY", p.to_string_lossy().to_string());
                         break;
@@ -201,14 +215,20 @@ impl ScreenCapturer {
             let (conn, screen_num) = match x11rb::connect(None) {
                 Ok(c) => c,
                 Err(e) => {
-                    log::warn!("No se pudo conectar a X11: {}", e);
+                    static LOGGED_CONN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                    if !LOGGED_CONN.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        log::error!("❌ [CAPTURA X11] No se pudo conectar a X11: {}. Ejecuta 'xhost +' en la terminal de Linux.", e);
+                    }
                     return None;
                 }
             };
             let setup = conn.setup();
             let screen = match setup.roots.get(screen_num) {
                 Some(s) => s,
-                None => return None,
+                None => {
+                    log::error!("❌ [CAPTURA X11] No se encontró pantalla X11.");
+                    return None;
+                }
             };
             let root = screen.root;
             self.screen_w = screen.width_in_pixels as i32;
@@ -237,27 +257,48 @@ impl ScreenCapturer {
             ) {
                 Ok(cookie) => match cookie.reply() {
                     Ok(rep) => rep,
-                    Err(_) => return None,
+                    Err(e) => {
+                        static LOGGED_IMG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                        if !LOGGED_IMG.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            log::error!("❌ [CAPTURA X11] Error al obtener fotograma get_image: {:?}", e);
+                        }
+                        return None;
+                    }
                 },
-                Err(_) => return None,
+                Err(e) => {
+                    static LOGGED_REQ: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                    if !LOGGED_REQ.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        log::error!("❌ [CAPTURA X11] Error en petición get_image: {:?}", e);
+                    }
+                    return None;
+                }
             };
 
             let raw_data = reply.data;
             let total_pixels = (self.screen_w * self.screen_h) as usize;
-            if raw_data.len() < total_pixels * 4 {
+            if raw_data.is_empty() {
                 return None;
             }
 
+            // Detectar bytes por píxel reales (4 para 32-bit, 3 para 24-bit)
+            let bpp = if raw_data.len() >= total_pixels * 4 {
+                4
+            } else if raw_data.len() >= total_pixels * 3 {
+                3
+            } else {
+                return None;
+            };
+
             let mut rgb_pixels = Vec::with_capacity((target_w * target_h * 3) as usize);
             if target_w == self.screen_w && target_h == self.screen_h {
-                for chunk in raw_data.chunks_exact(4) {
+                for chunk in raw_data.chunks_exact(bpp) {
                     rgb_pixels.push(chunk[2]); // R (desde byte 2 de BGRA)
                     rgb_pixels.push(chunk[1]); // G (desde byte 1 de BGRA)
                     rgb_pixels.push(chunk[0]); // B (desde byte 0 de BGRA)
                 }
             } else {
                 let mut full_rgb = Vec::with_capacity(total_pixels * 3);
-                for chunk in raw_data.chunks_exact(4) {
+                for chunk in raw_data.chunks_exact(bpp) {
                     full_rgb.push(chunk[2]);
                     full_rgb.push(chunk[1]);
                     full_rgb.push(chunk[0]);
@@ -275,6 +316,11 @@ impl ScreenCapturer {
             let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
             if encoder.encode(&rgb_pixels, target_w as u32, target_h as u32, image::ColorType::Rgb8).is_err() {
                 return None;
+            }
+
+            static LOGGED_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED_OK.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::info!("✅ [CAPTURA X11] Primer fotograma capturado exitosamente: {}x{} ({} bytes JPEG)", target_w, target_h, jpeg_bytes.len());
             }
 
             Some(ScreenFrame {

@@ -152,14 +152,22 @@ fn main() -> Result<(), eframe::Error> {
                     let maybe_controller = active_controller_for_capture.read().await.clone();
                     if let Some(target) = maybe_controller {
                         let current_q = *quality_for_capture.read().await;
-                        if let Some(frame) = capturer.capture_frame(current_q) {
-                            let base64_str = base64::engine::general_purpose::STANDARD.encode(&frame.jpeg_bytes);
-                            let _ = tx_for_capture.send(SignalMessage::VideoFrame {
-                                target_id: target,
-                                width: frame.width,
-                                height: frame.height,
-                                jpeg_base64: base64_str,
-                            });
+                        match capturer.capture_frame(current_q) {
+                            Some(frame) => {
+                                let base64_str = base64::engine::general_purpose::STANDARD.encode(&frame.jpeg_bytes);
+                                let _ = tx_for_capture.send(SignalMessage::VideoFrame {
+                                    target_id: target,
+                                    width: frame.width,
+                                    height: frame.height,
+                                    jpeg_base64: base64_str,
+                                });
+                            }
+                            None => {
+                                static LOGGED_NONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                                if !LOGGED_NONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    log::warn!("⚠️ [HOST STREAMING] capturer.capture_frame() retornó None. Compruebe permisos de X11 en la pestaña Terminal.");
+                                }
+                            }
                         }
                     }
                 }
