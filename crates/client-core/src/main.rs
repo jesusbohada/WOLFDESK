@@ -420,7 +420,7 @@ fn main() -> Result<(), eframe::Error> {
         ..Default::default()
     };
 
-    eframe::run_native(
+    let _res = eframe::run_native(
         "WolfDesk",
         native_options,
         Box::new(move |_cc| {
@@ -431,5 +431,7 @@ fn main() -> Result<(), eframe::Error> {
                 rx_from_net,
             ))
         }),
-    )
+    );
+
+    std::process::exit(0);
 }
