@@ -145,6 +145,9 @@ impl ScreenCapturer {
         }
 
         #[cfg(not(windows))]
-        None
+        {
+            let _ = quality;
+            None
+        }
     }
 }
