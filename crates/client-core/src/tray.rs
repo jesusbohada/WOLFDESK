@@ -227,15 +227,14 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
 
         if let Some(ref addr) = dbus_address {
             std::env::set_var("DBUS_SESSION_BUS_ADDRESS", addr);
-            eprintln!("🐺 [TRAY LINUX] Bus de sesión D-Bus configurado: {}", addr);
+            log::info!("🐺 [TRAY LINUX] Bus de sesión D-Bus configurado: {}", addr);
         } else {
-            eprintln!("⚠️ [TRAY LINUX] No se pudo encontrar DBUS_SESSION_BUS_ADDRESS.");
+            log::warn!("⚠️ [TRAY LINUX] No se pudo encontrar DBUS_SESSION_BUS_ADDRESS.");
         }
 
         let rt = match tokio::runtime::Runtime::new() {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("⚠️ [TRAY LINUX] Error al iniciar runtime Tokio para el tray: {:?}", e);
                 log::error!("⚠️ [TRAY LINUX] Error al iniciar runtime Tokio para el tray: {:?}", e);
                 return;
             }
@@ -249,7 +248,6 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
             };
             match tray.spawn().await {
                 Ok(handle) => {
-                    eprintln!("🐺 [TRAY LINUX] ✅ Icono de bandeja del sistema (KDE Plasma) iniciado con éxito.");
                     log::info!("🐺 [TRAY LINUX] ✅ Icono de bandeja del sistema (KDE Plasma) iniciado con éxito.");
                     std::mem::forget(handle);
                     loop {
@@ -257,7 +255,6 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
                     }
                 }
                 Err(e) => {
-                    eprintln!("⚠️ [TRAY LINUX] No se pudo inicializar la bandeja del sistema StatusNotifierItem: {:?}", e);
                     log::warn!("⚠️ [TRAY LINUX] No se pudo inicializar la bandeja del sistema StatusNotifierItem: {:?}", e);
                 }
             }
@@ -311,7 +308,6 @@ impl ksni::Tray for WolfDeskLinuxTray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        eprintln!("🐺 [TRAY LINUX] Clic en icono de bandeja. Restaurando ventana...");
         log::info!("🐺 [TRAY LINUX] Clic en icono de bandeja. Restaurando ventana...");
         let _ = self.tx_to_ui.send(crate::dashboard::NetToUi::ShowWindow);
         wake_ui();

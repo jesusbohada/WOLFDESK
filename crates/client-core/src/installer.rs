@@ -228,22 +228,75 @@ if (Test-Path $regPath) { Remove-Item -Path $regPath -Recurse -Force }
 
 #[cfg(target_os = "linux")]
 fn create_linux_desktop_entry(dest_exe: &Path) -> Result<(), String> {
+    let icon_bytes = include_bytes!("../assets/wolfdesk.png");
+    let _ = fs::write("/usr/share/pixmaps/wolfdesk.png", icon_bytes);
+
     let entry = format!(
         "[Desktop Entry]\n\
         Name=WolfDesk\n\
         Comment=WolfDesk Remote Desktop\n\
         Exec={}\n\
-        Icon=wolfdesk\n\
+        Icon=/usr/share/pixmaps/wolfdesk.png\n\
         Terminal=false\n\
         Type=Application\n\
-        Categories=Network;RemoteAccess;\n",
+        Categories=Network;RemoteAccess;\n\
+        StartupNotify=false\n\
+        X-GNOME-Autostart-enabled=true\n",
         dest_exe.display()
     );
+
     let _ = fs::write("/usr/share/applications/wolfdesk.desktop", &entry);
-    if let Ok(home) = std::env::var("HOME") {
-        let user_apps = PathBuf::from(home).join(".local/share/applications");
-        let _ = fs::create_dir_all(&user_apps);
-        let _ = fs::write(user_apps.join("wolfdesk.desktop"), &entry);
+
+    // Autostart del sistema para que inicie automáticamente al encender el equipo
+    let _ = fs::create_dir_all("/etc/xdg/autostart");
+    let _ = fs::write("/etc/xdg/autostart/wolfdesk.desktop", &entry);
+
+    // Accesos directos y Autostart para usuarios de escritorio
+    let home_dirs = ["/home/caja", "/root"];
+    for home in &home_dirs {
+        let home_path = PathBuf::from(home);
+        if home_path.exists() {
+            // .local/share/applications
+            let user_apps = home_path.join(".local/share/applications");
+            let _ = fs::create_dir_all(&user_apps);
+            let _ = fs::write(user_apps.join("wolfdesk.desktop"), &entry);
+
+            // .config/autostart
+            let user_autostart = home_path.join(".config/autostart");
+            let _ = fs::create_dir_all(&user_autostart);
+            let _ = fs::write(user_autostart.join("wolfdesk.desktop"), &entry);
+
+            // Escritorio (Desktop)
+            let user_desktop = home_path.join("Desktop");
+            if user_desktop.exists() {
+                let desktop_shortcut = user_desktop.join("WolfDesk.desktop");
+                let _ = fs::write(&desktop_shortcut, &entry);
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&desktop_shortcut, fs::Permissions::from_mode(0o755));
+            }
+        }
     }
+
+    // Servicio systemd para que pueda ejecutarse como demonio en segundo plano permanente
+    let service_content = format!(
+        "[Unit]\n\
+        Description=WolfDesk Pro Remote Desktop\n\
+        After=network.target display-manager.service graphical.target\n\
+        \n\
+        [Service]\n\
+        Type=simple\n\
+        User=root\n\
+        Environment=DISPLAY=:0\n\
+        Environment=XAUTHORITY=/home/caja/.Xauthority\n\
+        ExecStart={}\n\
+        Restart=always\n\
+        RestartSec=3\n\
+        \n\
+        [Install]\n\
+        WantedBy=graphical.target\n",
+        dest_exe.display()
+    );
+    let _ = fs::write("/etc/systemd/system/wolfdesk.service", service_content);
+
     Ok(())
 }

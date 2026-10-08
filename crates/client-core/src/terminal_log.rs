@@ -97,7 +97,8 @@ impl log::Log for AppLogger {
             };
             let time_str = current_time_str();
             let msg = format!("{}", record.args());
-            eprintln!("[{}] [{}] {}", time_str, level.badge(), msg);
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr(), "[{}] [{}] {}", time_str, level.badge(), msg);
             add_log(level, &msg);
         }
     }

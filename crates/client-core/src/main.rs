@@ -66,6 +66,12 @@ fn main() -> Result<(), eframe::Error> {
 
     #[cfg(target_os = "linux")]
     {
+        // Ignorar señales SIGHUP y SIGPIPE para que WolfDesk no se cierre si el usuario cierra la ventana de la terminal
+        unsafe {
+            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+            libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+        }
+
         if std::env::var("DISPLAY").is_err() {
             std::env::set_var("DISPLAY", ":0");
         }

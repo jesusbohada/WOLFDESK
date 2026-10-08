@@ -36,6 +36,7 @@ windows = { version = "0.52", features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["allow-unsafe-code", "extra-traits", "xtest"] }
 ksni = "0.3"
+libc = "0.2"
 
 [build-dependencies]
 winres = "0.1"

@@ -693,6 +693,7 @@ dependencies = [
  "futures",
  "image",
  "ksni",
+ "libc",
  "log",
  "minifb",
  "proto",
