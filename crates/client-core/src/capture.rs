@@ -18,7 +18,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt as XProtoExt, ImageFormat};
 
 #[cfg(target_os = "linux")]
-fn ensure_linux_x11_auth() {
+pub fn ensure_linux_x11_auth() {
     static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return;

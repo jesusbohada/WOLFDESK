@@ -389,6 +389,10 @@ fn main() -> Result<(), eframe::Error> {
                                 println!(">> [WOLFDESK HOST] Calidad de captura ajustada dinámicamente a {}%", quality);
                             }
                             _ => {
+                                static LOG_CTRL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                                if !LOG_CTRL.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    log::info!("🎮 [WOLFDESK HOST] Recibiendo eventos de control remoto desde el visor...");
+                                }
                                 let perms = *active_perm_from_net.read().await;
                                 dispatch_event_with_permissions(&event, &perms);
                             }

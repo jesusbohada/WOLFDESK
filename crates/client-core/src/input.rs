@@ -195,87 +195,150 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
 
     #[cfg(target_os = "linux")]
     {
-        use x11rb::connection::Connection;
-        use x11rb::protocol::xproto::ConnectionExt as XProtoExt;
-        use x11rb::protocol::xtest::ConnectionExt as XTestExt;
+        dispatch_linux_input_event(event, permissions);
+    }
 
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = (event, permissions);
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxInputContext {
+    conn: x11rb::rust_connection::RustConnection,
+    root: u32,
+    screen_w: f32,
+    screen_h: f32,
+}
+
+#[cfg(target_os = "linux")]
+static LINUX_INPUT_CTX: std::sync::Mutex<Option<LinuxInputContext>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+fn dispatch_linux_input_event(event: &ControlEvent, permissions: &SessionPermissions) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::ConnectionExt as XProtoExt;
+    use x11rb::protocol::xtest::ConnectionExt as XTestExt;
+
+    crate::capture::ensure_linux_x11_auth();
+
+    let mut guard = match LINUX_INPUT_CTX.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+
+    if guard.is_none() {
         if std::env::var("DISPLAY").is_err() {
             std::env::set_var("DISPLAY", ":0");
         }
 
         let (conn, screen_num) = match x11rb::connect(None) {
             Ok(c) => c,
-            Err(_) => return,
+            Err(e) => {
+                log::error!("❌ [INPUT X11] Error al conectar con X11 para inyección de periféricos: {:?}", e);
+                return;
+            }
         };
 
         let setup = conn.setup();
         let screen = match setup.roots.get(screen_num) {
             Some(s) => s,
-            None => return,
+            None => {
+                log::error!("❌ [INPUT X11] Pantalla X11 no encontrada (screen_num={})", screen_num);
+                return;
+            }
         };
+
         let root = screen.root;
-        let screen_w = screen.width_in_pixels as f32;
-        let screen_h = screen.height_in_pixels as f32;
+        let mut scr_w = screen.width_in_pixels as f32;
+        let mut scr_h = screen.height_in_pixels as f32;
 
-        match event {
-            ControlEvent::MouseMove { x, y } => {
-                if !permissions.allow_mouse {
-                    return;
-                }
-                let target_x = (x.clamp(0.0, 1.0) * (screen_w - 1.0)).round() as i16;
-                let target_y = (y.clamp(0.0, 1.0) * (screen_h - 1.0)).round() as i16;
-                let _ = conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, target_x, target_y);
-                let _ = conn.flush();
+        if let Ok(geom_cookie) = conn.get_geometry(root) {
+            if let Ok(geom) = geom_cookie.reply() {
+                scr_w = geom.width as f32;
+                scr_h = geom.height as f32;
             }
-
-            ControlEvent::MouseButton { button, down, x, y } => {
-                if !permissions.allow_mouse {
-                    return;
-                }
-                if let (Some(px), Some(py)) = (x, y) {
-                    let target_x = (px.clamp(0.0, 1.0) * (screen_w - 1.0)).round() as i16;
-                    let target_y = (py.clamp(0.0, 1.0) * (screen_h - 1.0)).round() as i16;
-                    let _ = conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, target_x, target_y);
-                }
-
-                let btn_code = match button {
-                    MouseButtonType::Left => 1,
-                    MouseButtonType::Middle => 2,
-                    MouseButtonType::Right => 3,
-                };
-                let ev_type = if *down { 4 } else { 5 }; // 4 = ButtonPress, 5 = ButtonRelease
-                let _ = conn.xtest_fake_input(ev_type, btn_code, 0, root, 0, 0, 0);
-                let _ = conn.flush();
-            }
-
-            ControlEvent::MouseWheel { delta_y, .. } => {
-                if !permissions.allow_mouse {
-                    return;
-                }
-                let btn = if *delta_y > 0 { 4 } else { 5 }; // 4 = WheelUp, 5 = WheelDown
-                let _ = conn.xtest_fake_input(4, btn, 0, root, 0, 0, 0);
-                let _ = conn.xtest_fake_input(5, btn, 0, root, 0, 0, 0);
-                let _ = conn.flush();
-            }
-
-            ControlEvent::Keyboard { vk_code, down } => {
-                if !permissions.allow_keyboard {
-                    return;
-                }
-                if let Some(keycode) = map_vk_to_linux_keycode(*vk_code) {
-                    let ev_type = if *down { 2 } else { 3 }; // 2 = KeyPress, 3 = KeyRelease
-                    let _ = conn.xtest_fake_input(ev_type, keycode, 0, root, 0, 0, 0);
-                    let _ = conn.flush();
-                }
-            }
-
-            _ => {}
         }
+
+        log::info!("🎮 [INPUT X11] Conexión XTEST persistente inicializada con éxito (Pantalla: {}x{}, Root: 0x{:x})", scr_w, scr_h, root);
+        *guard = Some(LinuxInputContext {
+            conn,
+            root,
+            screen_w: scr_w,
+            screen_h: scr_h,
+        });
     }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        let _ = (event, permissions);
+    let ctx = match guard.as_mut() {
+        Some(c) => c,
+        None => return,
+    };
+
+    match event {
+        ControlEvent::MouseMove { x, y } => {
+            if !permissions.allow_mouse {
+                return;
+            }
+            let target_x = (x.clamp(0.0, 1.0) * (ctx.screen_w - 1.0)).round() as i16;
+            let target_y = (y.clamp(0.0, 1.0) * (ctx.screen_h - 1.0)).round() as i16;
+
+            // 1. Mover el cursor directamente en el servidor X11
+            let _ = ctx.conn.warp_pointer(x11rb::NONE, ctx.root, 0, 0, 0, 0, target_x, target_y);
+            // 2. Enviar evento MotionNotify sintético por XTEST (Tipo 6) para actualizar ventanas y hover
+            let _ = ctx.conn.xtest_fake_input(6, 0, 0, ctx.root, target_x, target_y, 0);
+            let _ = ctx.conn.flush();
+        }
+
+        ControlEvent::MouseButton { button, down, x, y } => {
+            if !permissions.allow_mouse {
+                return;
+            }
+            if let (Some(px), Some(py)) = (x, y) {
+                let target_x = (px.clamp(0.0, 1.0) * (ctx.screen_w - 1.0)).round() as i16;
+                let target_y = (py.clamp(0.0, 1.0) * (ctx.screen_h - 1.0)).round() as i16;
+                let _ = ctx.conn.warp_pointer(x11rb::NONE, ctx.root, 0, 0, 0, 0, target_x, target_y);
+                let _ = ctx.conn.xtest_fake_input(6, 0, 0, ctx.root, target_x, target_y, 0);
+            }
+
+            let btn_code = match button {
+                MouseButtonType::Left => 1,
+                MouseButtonType::Middle => 2,
+                MouseButtonType::Right => 3,
+            };
+            let ev_type = if *down { 4 } else { 5 }; // 4 = ButtonPress, 5 = ButtonRelease
+            // En XTEST para ButtonPress/ButtonRelease el root DEBE ser x11rb::NONE (0)
+            let res = ctx.conn.xtest_fake_input(ev_type, btn_code, 0, x11rb::NONE, 0, 0, 0);
+            let _ = ctx.conn.flush();
+            log::info!("🖱️ [INPUT CLIC] Botón {:?} (down={}) -> Éxito: {}", button, down, res.is_ok());
+        }
+
+        ControlEvent::MouseWheel { delta_y, .. } => {
+            if !permissions.allow_mouse {
+                return;
+            }
+            let btn = if *delta_y > 0 { 4 } else { 5 }; // 4 = WheelUp, 5 = WheelDown
+            let _ = ctx.conn.xtest_fake_input(4, btn, 0, x11rb::NONE, 0, 0, 0);
+            let _ = ctx.conn.xtest_fake_input(5, btn, 0, x11rb::NONE, 0, 0, 0);
+            let _ = ctx.conn.flush();
+        }
+
+        ControlEvent::Keyboard { vk_code, down } => {
+            if !permissions.allow_keyboard {
+                return;
+            }
+            if let Some(keycode) = map_vk_to_linux_keycode(*vk_code) {
+                let ev_type = if *down { 2 } else { 3 }; // 2 = KeyPress, 3 = KeyRelease
+                // En XTEST para KeyPress/KeyRelease el root DEBE ser x11rb::NONE (0)
+                let res = ctx.conn.xtest_fake_input(ev_type, keycode, 0, x11rb::NONE, 0, 0, 0);
+                let _ = ctx.conn.flush();
+                log::info!("⌨️ [INPUT TECLADO] VK 0x{:X} -> Keycode {} (down={}) -> Éxito: {}", vk_code, keycode, down, res.is_ok());
+            } else {
+                log::warn!("⚠️ [INPUT TECLADO] Tecla VK 0x{:X} no mapeada a código de tecla Linux", vk_code);
+            }
+        }
+
+        _ => {}
     }
 }
 
@@ -287,10 +350,15 @@ fn map_vk_to_linux_keycode(vk: u16) -> Option<u8> {
         0x0D => Some(36),  // Enter / Return
         0x1B => Some(9),   // Escape
         0x20 => Some(65),  // Space
+        0x21 => Some(112), // PageUp
+        0x22 => Some(117), // PageDown
+        0x23 => Some(115), // End
+        0x24 => Some(110), // Home
         0x25 => Some(113), // Left
         0x26 => Some(111), // Up
         0x27 => Some(114), // Right
         0x28 => Some(116), // Down
+        0x2D => Some(118), // Insert
         0x2E => Some(119), // Delete
         0x10 | 0xA0 => Some(50), // LShift
         0xA1 => Some(62),        // RShift
@@ -304,6 +372,15 @@ fn map_vk_to_linux_keycode(vk: u16) -> Option<u8> {
         // Números 0-9
         0x30 => Some(19), // 0
         0x31..=0x39 => Some((vk - 0x31 + 10) as u8), // 1-9 -> 10-18
+
+        // Teclado numérico (Numpad 0-9)
+        0x60 => Some(90), // KP_0
+        0x61..=0x69 => Some((vk - 0x61 + 87) as u8), // KP_1..KP_9 -> 87..95
+        0x6A => Some(63), // KP_Multiply
+        0x6B => Some(86), // KP_Add
+        0x6D => Some(82), // KP_Subtract
+        0x6E => Some(91), // KP_Decimal
+        0x6F => Some(106), // KP_Divide
 
         // Letras A-Z
         0x41 => Some(38), // A
@@ -337,6 +414,19 @@ fn map_vk_to_linux_keycode(vk: u16) -> Option<u8> {
         0x70..=0x79 => Some((vk - 0x70 + 67) as u8), // F1-F10 -> 67-76
         0x7A => Some(95),                            // F11
         0x7B => Some(96),                            // F12
+
+        // Puntuación básica
+        0xBA => Some(47), // Semicolon
+        0xBB => Some(21), // Equal
+        0xBC => Some(59), // Comma
+        0xBD => Some(20), // Minus
+        0xBE => Some(60), // Period
+        0xBF => Some(61), // Slash
+        0xC0 => Some(48), // Grave / Tilde
+        0xDB => Some(34), // BracketLeft
+        0xDC => Some(51), // Backslash
+        0xDD => Some(35), // BracketRight
+        0xDE => Some(49), // Quote / Apostrophe
 
         _ => None,
     }
