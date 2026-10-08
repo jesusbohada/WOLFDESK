@@ -70,16 +70,16 @@ sudo dnf install -y gcc gcc-c++ make pkgconf-pkg-config libX11-devel alsa-lib-de
 sudo pacman -S --needed base-devel alsa-lib libx11 libxcursor libxrandr libxi libxkbcommon rustup git
 ```
 
-### Paso 2: Instalar Rust (si no está instalado)
+### Paso 2: Instalar Rust (de forma automática)
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 ```
 
-### Paso 3: Compilar WolfDesk
+### Paso 3: Descargar y Compilar WolfDesk
 ```bash
-git clone <tu-repositorio>
-cd remote-desktop
+git clone https://github.com/jesusbohada/WOLFDESK.git
+cd WOLFDESK
 cargo build --release --bin wolfdesk
 ```
 
@@ -117,14 +117,14 @@ xcode-select --install
 
 ### Paso 2: Instalar Rust
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 ```
 
-### Paso 3: Compilar WolfDesk
+### Paso 3: Descargar y Compilar WolfDesk
 ```bash
-git clone <tu-repositorio>
-cd remote-desktop
+git clone https://github.com/jesusbohada/WOLFDESK.git
+cd WOLFDESK
 cargo build --release --bin wolfdesk
 ```
 

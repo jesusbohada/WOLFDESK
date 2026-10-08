@@ -65,39 +65,65 @@ cargo run --release --bin wolfdesk
 
 ## 📦 Instalación en el Sistema
 
-### Windows
-- Ejecuta `instalar_wolfdesk.bat` o usa el botón **"Instalar WolfDesk"** dentro de la interfaz gráfica.
+### 🪟 Windows (10 / 11)
+1. Descarga el ejecutable `wolfdesk.exe` o compila con `cargo build --release --bin wolfdesk`.
+2. Para instalar permanentemente en el sistema con accesos directos en el Escritorio e Inicio:
+   - Haz clic en el botón **"🚀 Instalar WolfDesk"** en la pestaña Inicio o en Ajustes.
+   - O bien ejecuta el asistente rápido `instalar_wolfdesk.bat`.
+   - O genera el instalador clásico `.exe` con el script Inno Setup `wolfdesk_setup.iss`.
 
-### Linux (Ubuntu / Debian / Mint / etc.)
+---
 
-En una máquina nueva con Linux, sigue estos pasos desde la terminal:
+### 🐧 Linux (Ubuntu / Debian / Linux Mint / Fedora / Arch)
 
+Abre la terminal en tu equipo Linux y ejecuta estos 3 pasos:
+
+#### 1. Instalar dependencias del sistema y Rust (Automático)
 ```bash
-# 1. Instalar dependencias del sistema y Rust
-sudo apt update && sudo apt install -y build-essential pkg-config libx11-dev libasound2-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev git curl
+sudo apt update && sudo apt install -y git build-essential pkg-config libx11-dev libasound2-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev curl
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
+```
 
-# 2. Descargar el código fuente
+#### 2. Descargar el proyecto y entrar a la carpeta
+```bash
 git clone https://github.com/jesusbohada/WOLFDESK.git
 cd WOLFDESK
+```
 
-# 3. Compilar e Instalar en el sistema
+#### 3. Compilar e Instalar
+```bash
 cargo build --release --bin wolfdesk
 sudo bash scripts/install_linux.sh
 ```
+> *(WolfDesk quedará instalado en `/opt/wolfdesk`, con acceso directo en tu menú de aplicaciones y ejecutable global `wolfdesk`).*
 
-*(Opcional: Si prefieres empaquetar un archivo instalador `.deb`:)*
+*(Opcional: Si deseas generar un instalador `.deb` para instalar con doble clic):*
 ```bash
 bash scripts/package_deb.sh
 sudo apt install ./wolfdesk_1.2.0_amd64.deb
 ```
 
-### macOS
+---
+
+### 🍎 macOS (Apple Silicon M-series e Intel)
+
+En una Mac con macOS Monterey, Ventura, Sonoma o Sequoia:
+
 ```bash
+# 1. Herramientas y Rust
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
+# 2. Descargar el proyecto
+git clone https://github.com/jesusbohada/WOLFDESK.git
+cd WOLFDESK
+
+# 3. Compilar y empaquetar aplicación (.app y .dmg)
 bash scripts/package_macos.sh
-# Abre dist_macos/WolfDesk.app o instala con el archivo .dmg generado
 ```
+> *(Se generará el archivo `WolfDesk.app` para arrastrar a `/Applications` y la imagen de disco `WolfDesk-macOS-Universal.dmg`).*
 
 ---
 
