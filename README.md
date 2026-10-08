@@ -76,29 +76,35 @@ cargo run --release --bin wolfdesk
 
 ### 🐧 Linux (Ubuntu / Debian / Linux Mint / Fedora / Arch)
 
-Abre la terminal en tu equipo Linux y ejecuta estos 3 pasos:
+Abre la terminal en tu equipo Linux y ejecuta los siguientes pasos en orden:
 
-#### 1. Instalar dependencias del sistema y Rust (Automático)
+#### Paso 1: Instalar dependencias y herramientas
 ```bash
-sudo apt update && sudo apt install -y git build-essential pkg-config libx11-dev libasound2-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev curl
+sudo apt update || true
+sudo apt install -y git build-essential pkg-config libx11-dev libasound2-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev curl
+```
+*(Nota: `|| true` asegura que la instalación continúe aunque tengas algún repositorio viejo de terceros dando error 404).*
+
+#### Paso 2: Instalar Rust (Automático y sin preguntas)
+```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 ```
 
-#### 2. Descargar el proyecto y entrar a la carpeta
+#### Paso 3: Descargar el proyecto y entrar a la carpeta
 ```bash
 git clone https://github.com/jesusbohada/WOLFDESK.git
 cd WOLFDESK
 ```
 
-#### 3. Compilar e Instalar
+#### Paso 4: Compilar e Instalar WolfDesk
 ```bash
 cargo build --release --bin wolfdesk
 sudo bash scripts/install_linux.sh
 ```
-> *(WolfDesk quedará instalado en `/opt/wolfdesk`, con acceso directo en tu menú de aplicaciones y ejecutable global `wolfdesk`).*
+> ✅ **¡Listo!** WolfDesk quedará instalado en `/opt/wolfdesk`, con acceso directo en tu menú de aplicaciones y comando global `wolfdesk`.
 
-*(Opcional: Si deseas generar un instalador `.deb` para instalar con doble clic):*
+*(Opcional: Si prefieres empaquetar un archivo `.deb` para instalar con doble clic en cualquier máquina Debian/Ubuntu):*
 ```bash
 bash scripts/package_deb.sh
 sudo apt install ./wolfdesk_1.2.0_amd64.deb

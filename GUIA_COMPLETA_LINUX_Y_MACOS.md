@@ -56,9 +56,16 @@ Si tienes un equipo con Linux (o estás conectado por SSH), puedes compilar e in
 
 #### En Ubuntu / Debian / Linux Mint:
 ```bash
-sudo apt update
-sudo apt install -y build-essential pkg-config libx11-dev libasound2-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev curl git
+sudo apt update || true
+sudo apt install -y git build-essential pkg-config libx11-dev libasound2-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev curl
 ```
+
+> [!TIP]
+> **¿Error 404 en `apt update` por repositorios viejos?**  
+> Si tu Linux tiene repositorios de terceros antiguos que ya no existen (por ejemplo MEGA, PPAs obsoletos) y bloquean la actualización, elimina el archivo conflictivo con:
+> ```bash
+> sudo rm -f /etc/apt/sources.list.d/*mega*
+> ```
 
 #### En Fedora / Red Hat / CentOS:
 ```bash
