@@ -148,26 +148,94 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
 }
 
 #[cfg(target_os = "linux")]
+fn get_tray_icon_pixmap() -> Vec<ksni::Icon> {
+    let png_bytes = include_bytes!("../assets/wolfdesk.png");
+    if let Ok(img) = image::load_from_memory(png_bytes) {
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        let mut argb_data = Vec::with_capacity((w * h * 4) as usize);
+        for pixel in rgba.pixels() {
+            // ksni::Icon data expects ARGB32 in network byte order (big endian):
+            // byte 0: Alpha, byte 1: Red, byte 2: Green, byte 3: Blue
+            argb_data.push(pixel[3]); // A
+            argb_data.push(pixel[0]); // R
+            argb_data.push(pixel[1]); // G
+            argb_data.push(pixel[2]); // B
+        }
+        vec![ksni::Icon {
+            width: w as i32,
+            height: h as i32,
+            data: argb_data,
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(target_os = "linux")]
 pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::dashboard::NetToUi>) {
     let id_clone = my_id.to_string();
     std::thread::spawn(move || {
-        // Asegurar que el proceso root tenga acceso al bus de sesión del usuario de escritorio (KDE Plasma)
-        if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_err() {
-            let candidates = [
-                "/run/user/1000/bus",
-                "/run/user/1001/bus",
-            ];
-            for path in &candidates {
-                if std::path::Path::new(path).exists() {
-                    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={}", path));
-                    break;
+        // 1. Escribir icono a disco para que el tema del escritorio o cargador lo encuentre siempre
+        let icon_bytes = include_bytes!("../assets/wolfdesk.png");
+        let _ = std::fs::write("/tmp/wolfdesk.png", icon_bytes);
+        let _ = std::fs::write("/tmp/preferences-desktop-remote-desktop.png", icon_bytes);
+        let _ = std::fs::write("/usr/share/pixmaps/wolfdesk.png", icon_bytes);
+
+        // 2. Asegurar que root tenga permiso en el bus de sesión D-Bus de /etc/dbus-1
+        let dbus_dir = std::path::Path::new("/etc/dbus-1");
+        if dbus_dir.exists() {
+            let conf_content = "<busconfig>\n  <policy context=\"mandatory\">\n    <allow user=\"root\"/>\n  </policy>\n</busconfig>\n";
+            let _ = std::fs::write(dbus_dir.join("session-local.conf"), conf_content);
+            let session_d = dbus_dir.join("session.d");
+            let _ = std::fs::create_dir_all(&session_d);
+            let _ = std::fs::write(session_d.join("allow-root.conf"), conf_content);
+        }
+
+        // 3. Autodetectar el bus de sesión D-Bus del usuario del escritorio (KDE Plasma / caja)
+        let mut dbus_address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok();
+        if dbus_address.as_deref().unwrap_or("").trim().is_empty() {
+            if std::path::Path::new("/run/user/1000/bus").exists() {
+                dbus_address = Some("unix:path=/run/user/1000/bus".to_string());
+            } else if std::path::Path::new("/run/user/1001/bus").exists() {
+                dbus_address = Some("unix:path=/run/user/1001/bus".to_string());
+            } else if let Ok(entries) = std::fs::read_dir("/proc") {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if let Ok(cmdline) = std::fs::read_to_string(p.join("cmdline")) {
+                        if cmdline.contains("plasma") || cmdline.contains("kded") || cmdline.contains("kwin") {
+                            if let Ok(env_bytes) = std::fs::read(p.join("environ")) {
+                                for chunk in env_bytes.split(|&b| b == 0) {
+                                    if let Ok(var_str) = std::str::from_utf8(chunk) {
+                                        if let Some(stripped) = var_str.strip_prefix("DBUS_SESSION_BUS_ADDRESS=") {
+                                            if !stripped.trim().is_empty() {
+                                                dbus_address = Some(stripped.to_string());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if dbus_address.is_some() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        if let Some(ref addr) = dbus_address {
+            std::env::set_var("DBUS_SESSION_BUS_ADDRESS", addr);
+            eprintln!("🐺 [TRAY LINUX] Bus de sesión D-Bus configurado: {}", addr);
+        } else {
+            eprintln!("⚠️ [TRAY LINUX] No se pudo encontrar DBUS_SESSION_BUS_ADDRESS.");
         }
 
         let rt = match tokio::runtime::Runtime::new() {
             Ok(r) => r,
             Err(e) => {
+                eprintln!("⚠️ [TRAY LINUX] Error al iniciar runtime Tokio para el tray: {:?}", e);
                 log::error!("⚠️ [TRAY LINUX] Error al iniciar runtime Tokio para el tray: {:?}", e);
                 return;
             }
@@ -181,13 +249,15 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
             };
             match tray.spawn().await {
                 Ok(handle) => {
-                    log::info!("🐺 [TRAY LINUX] Icono de bandeja del sistema (KDE Plasma) iniciado con éxito.");
+                    eprintln!("🐺 [TRAY LINUX] ✅ Icono de bandeja del sistema (KDE Plasma) iniciado con éxito.");
+                    log::info!("🐺 [TRAY LINUX] ✅ Icono de bandeja del sistema (KDE Plasma) iniciado con éxito.");
                     std::mem::forget(handle);
                     loop {
                         tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
                     }
                 }
                 Err(e) => {
+                    eprintln!("⚠️ [TRAY LINUX] No se pudo inicializar la bandeja del sistema StatusNotifierItem: {:?}", e);
                     log::warn!("⚠️ [TRAY LINUX] No se pudo inicializar la bandeja del sistema StatusNotifierItem: {:?}", e);
                 }
             }
@@ -207,24 +277,47 @@ impl ksni::Tray for WolfDeskLinuxTray {
         "wolfdesk".into()
     }
 
+    fn category(&self) -> ksni::Category {
+        ksni::Category::ApplicationStatus
+    }
+
     fn title(&self) -> String {
         format!("WolfDesk Pro [{}]", self.my_id)
     }
 
+    fn status(&self) -> ksni::Status {
+        ksni::Status::Active
+    }
+
     fn icon_name(&self) -> String {
-        "network-workgroup".into()
+        "preferences-desktop-remote-desktop".into()
+    }
+
+    fn icon_theme_path(&self) -> String {
+        "/tmp".into()
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        get_tray_icon_pixmap()
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: "WolfDesk Pro".into(),
             description: format!("ID: {} | Servicio activo en segundo plano", self.my_id),
-            ..Default::default()
+            icon_name: "preferences-desktop-remote-desktop".into(),
+            icon_pixmap: get_tray_icon_pixmap(),
         }
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
+        eprintln!("🐺 [TRAY LINUX] Clic en icono de bandeja. Restaurando ventana...");
         log::info!("🐺 [TRAY LINUX] Clic en icono de bandeja. Restaurando ventana...");
+        let _ = self.tx_to_ui.send(crate::dashboard::NetToUi::ShowWindow);
+        wake_ui();
+    }
+
+    fn secondary_activate(&mut self, _x: i32, _y: i32) {
         let _ = self.tx_to_ui.send(crate::dashboard::NetToUi::ShowWindow);
         wake_ui();
     }

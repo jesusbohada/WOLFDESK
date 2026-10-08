@@ -95,7 +95,10 @@ impl log::Log for AppLogger {
                 log::Level::Warn => LogLevel::Warn,
                 _ => LogLevel::Info,
             };
-            add_log(level, &format!("{}", record.args()));
+            let time_str = current_time_str();
+            let msg = format!("{}", record.args());
+            eprintln!("[{}] [{}] {}", time_str, level.badge(), msg);
+            add_log(level, &msg);
         }
     }
 

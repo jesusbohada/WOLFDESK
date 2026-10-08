@@ -45,6 +45,20 @@ fn main() -> Result<(), eframe::Error> {
         return Ok(());
     }
 
+    // Instancia única: si WolfDesk ya está activo en segundo plano, solicitar mostrar la ventana y salir
+    let single_instance_port = 19059;
+    if let Ok(socket) = std::net::UdpSocket::bind("127.0.0.1:0") {
+        let _ = socket.set_read_timeout(Some(std::time::Duration::from_millis(300)));
+        let _ = socket.send_to(b"SHOW", format!("127.0.0.1:{}", single_instance_port));
+        let mut buf = [0u8; 16];
+        if let Ok((len, _)) = socket.recv_from(&mut buf) {
+            if &buf[..len] == b"OK" {
+                println!("🐺 WolfDesk ya está activo en segundo plano. Restaurando ventana al primer plano...");
+                return Ok(());
+            }
+        }
+    }
+
     #[cfg(windows)]
     unsafe {
         let _ = windows::Win32::UI::WindowsAndMessaging::SetProcessDPIAware();
@@ -92,6 +106,21 @@ fn main() -> Result<(), eframe::Error> {
 
     // Iniciar el icono de bandeja del sistema (segundo plano permanente junto al reloj)
     client_core::tray::start_system_tray(&my_id, tx_to_ui.clone());
+
+    // Escuchar solicitudes de mostrar ventana desde instancias secundarias
+    if let Ok(listener) = std::net::UdpSocket::bind(format!("127.0.0.1:{}", single_instance_port)) {
+        let tx_ui = tx_to_ui.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 32];
+            while let Ok((len, src)) = listener.recv_from(&mut buf) {
+                if &buf[..len] == b"SHOW" {
+                    let _ = listener.send_to(b"OK", src);
+                    let _ = tx_ui.send(NetToUi::ShowWindow);
+                    client_core::tray::wake_ui();
+                }
+            }
+        });
+    }
 
     // Canales de red hacia el servidor WebSocket
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<SignalMessage>();
