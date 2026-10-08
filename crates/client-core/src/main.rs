@@ -50,6 +50,33 @@ fn main() -> Result<(), eframe::Error> {
         let _ = windows::Win32::UI::WindowsAndMessaging::SetProcessDPIAware();
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("DISPLAY").is_err() {
+            std::env::set_var("DISPLAY", ":0");
+        }
+        if std::env::var("XAUTHORITY").is_err() {
+            let candidates = ["/home/caja/.Xauthority", "/root/.Xauthority"];
+            for path in &candidates {
+                if std::path::Path::new(path).exists() {
+                    std::env::set_var("XAUTHORITY", path);
+                    break;
+                }
+            }
+            if std::env::var("XAUTHORITY").is_err() {
+                if let Ok(entries) = std::fs::read_dir("/home") {
+                    for entry in entries.flatten() {
+                        let p = entry.path().join(".Xauthority");
+                        if p.exists() {
+                            std::env::set_var("XAUTHORITY", p.to_string_lossy().to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Inicializar el logger integrado para la terminal GUI interna
     client_core::init_terminal_logger();
 

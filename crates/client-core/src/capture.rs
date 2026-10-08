@@ -12,13 +12,48 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN},
 };
 
+#[cfg(target_os = "linux")]
+use x11rb::connection::Connection;
+#[cfg(target_os = "linux")]
+use x11rb::protocol::xproto::{ConnectionExt as XProtoExt, ImageFormat};
+
+#[cfg(target_os = "linux")]
+fn ensure_linux_x11_auth() {
+    if std::env::var("DISPLAY").is_err() {
+        std::env::set_var("DISPLAY", ":0");
+    }
+    if std::env::var("XAUTHORITY").is_err() {
+        let candidates = [
+            "/home/caja/.Xauthority",
+            "/root/.Xauthority",
+        ];
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                std::env::set_var("XAUTHORITY", path);
+                break;
+            }
+        }
+        if std::env::var("XAUTHORITY").is_err() {
+            if let Ok(entries) = std::fs::read_dir("/home") {
+                for entry in entries.flatten() {
+                    let p = entry.path().join(".Xauthority");
+                    if p.exists() {
+                        std::env::set_var("XAUTHORITY", p.to_string_lossy().to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct ScreenFrame {
     pub width: u32,
     pub height: u32,
     pub jpeg_bytes: Vec<u8>,
 }
 
-/// Capturador de pantalla optimizado para Windows con GetDIBits y aceleración GDI
+/// Capturador de pantalla optimizado multiplataforma (Windows GDI / Linux X11)
 pub struct ScreenCapturer {
     pub screen_w: i32,
     pub screen_h: i32,
@@ -32,7 +67,23 @@ impl ScreenCapturer {
             let screen_h = GetSystemMetrics(SM_CYSCREEN);
             Self { screen_w, screen_h }
         }
-        #[cfg(not(windows))]
+
+        #[cfg(target_os = "linux")]
+        {
+            ensure_linux_x11_auth();
+            if let Ok((conn, screen_num)) = x11rb::connect(None) {
+                let setup = conn.setup();
+                if let Some(screen) = setup.roots.get(screen_num) {
+                    return Self {
+                        screen_w: screen.width_in_pixels as i32,
+                        screen_h: screen.height_in_pixels as i32,
+                    };
+                }
+            }
+            Self { screen_w: 1920, screen_h: 1080 }
+        }
+
+        #[cfg(not(any(windows, target_os = "linux")))]
         Self { screen_w: 1920, screen_h: 1080 }
     }
 
@@ -144,7 +195,96 @@ impl ScreenCapturer {
             })
         }
 
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            ensure_linux_x11_auth();
+            let (conn, screen_num) = match x11rb::connect(None) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("No se pudo conectar a X11: {}", e);
+                    return None;
+                }
+            };
+            let setup = conn.setup();
+            let screen = match setup.roots.get(screen_num) {
+                Some(s) => s,
+                None => return None,
+            };
+            let root = screen.root;
+            self.screen_w = screen.width_in_pixels as i32;
+            self.screen_h = screen.height_in_pixels as i32;
+
+            if self.screen_w <= 0 || self.screen_h <= 0 {
+                return None;
+            }
+
+            let (target_w, target_h) = if quality <= 45 {
+                let max_w = 1280.min(self.screen_w);
+                let max_h = (max_w as f32 * (self.screen_h as f32 / self.screen_w as f32)) as i32;
+                (max_w, max_h)
+            } else {
+                (self.screen_w, self.screen_h)
+            };
+
+            let reply = match conn.get_image(
+                ImageFormat::Z_PIXMAP,
+                root,
+                0,
+                0,
+                self.screen_w as u16,
+                self.screen_h as u16,
+                !0,
+            ) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(rep) => rep,
+                    Err(_) => return None,
+                },
+                Err(_) => return None,
+            };
+
+            let raw_data = reply.data;
+            let total_pixels = (self.screen_w * self.screen_h) as usize;
+            if raw_data.len() < total_pixels * 4 {
+                return None;
+            }
+
+            let mut rgb_pixels = Vec::with_capacity((target_w * target_h * 3) as usize);
+            if target_w == self.screen_w && target_h == self.screen_h {
+                for chunk in raw_data.chunks_exact(4) {
+                    rgb_pixels.push(chunk[2]); // R (desde byte 2 de BGRA)
+                    rgb_pixels.push(chunk[1]); // G (desde byte 1 de BGRA)
+                    rgb_pixels.push(chunk[0]); // B (desde byte 0 de BGRA)
+                }
+            } else {
+                let mut full_rgb = Vec::with_capacity(total_pixels * 3);
+                for chunk in raw_data.chunks_exact(4) {
+                    full_rgb.push(chunk[2]);
+                    full_rgb.push(chunk[1]);
+                    full_rgb.push(chunk[0]);
+                }
+                if let Some(src_img) = image::RgbImage::from_raw(self.screen_w as u32, self.screen_h as u32, full_rgb) {
+                    let resized = image::imageops::resize(&src_img, target_w as u32, target_h as u32, image::imageops::FilterType::Nearest);
+                    rgb_pixels = resized.into_raw();
+                } else {
+                    return None;
+                }
+            }
+
+            let mut jpeg_bytes = Vec::with_capacity(rgb_pixels.len() / 8);
+            let mut cursor = Cursor::new(&mut jpeg_bytes);
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
+            if encoder.encode(&rgb_pixels, target_w as u32, target_h as u32, image::ColorType::Rgb8).is_err() {
+                return None;
+            }
+
+            Some(ScreenFrame {
+                width: target_w as u32,
+                height: target_h as u32,
+                jpeg_bytes,
+            })
+        }
+
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let _ = quality;
             None

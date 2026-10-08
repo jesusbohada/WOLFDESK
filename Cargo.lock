@@ -691,6 +691,7 @@ dependencies = [
  "url",
  "windows 0.52.0",
  "winres",
+ "x11rb",
 ]
 
 [[package]]

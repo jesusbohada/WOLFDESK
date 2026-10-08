@@ -193,8 +193,151 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
         ControlEvent::SetQuality { .. } | ControlEvent::Ping { .. } | ControlEvent::Pong { .. } => {}
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt as XProtoExt;
+        use x11rb::protocol::xtest::ConnectionExt as XTestExt;
+
+        if std::env::var("DISPLAY").is_err() {
+            std::env::set_var("DISPLAY", ":0");
+        }
+
+        let (conn, screen_num) = match x11rb::connect(None) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let setup = conn.setup();
+        let screen = match setup.roots.get(screen_num) {
+            Some(s) => s,
+            None => return,
+        };
+        let root = screen.root;
+        let screen_w = screen.width_in_pixels as f32;
+        let screen_h = screen.height_in_pixels as f32;
+
+        match event {
+            ControlEvent::MouseMove { x, y } => {
+                if !permissions.allow_mouse {
+                    return;
+                }
+                let target_x = (x.clamp(0.0, 1.0) * (screen_w - 1.0)).round() as i16;
+                let target_y = (y.clamp(0.0, 1.0) * (screen_h - 1.0)).round() as i16;
+                let _ = conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, target_x, target_y);
+                let _ = conn.flush();
+            }
+
+            ControlEvent::MouseButton { button, down, x, y } => {
+                if !permissions.allow_mouse {
+                    return;
+                }
+                if let (Some(px), Some(py)) = (x, y) {
+                    let target_x = (px.clamp(0.0, 1.0) * (screen_w - 1.0)).round() as i16;
+                    let target_y = (py.clamp(0.0, 1.0) * (screen_h - 1.0)).round() as i16;
+                    let _ = conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, target_x, target_y);
+                }
+
+                let btn_code = match button {
+                    MouseButtonType::Left => 1,
+                    MouseButtonType::Middle => 2,
+                    MouseButtonType::Right => 3,
+                };
+                let ev_type = if *down { 4 } else { 5 }; // 4 = ButtonPress, 5 = ButtonRelease
+                let _ = conn.fake_input(ev_type, btn_code, 0, root, 0, 0, 0);
+                let _ = conn.flush();
+            }
+
+            ControlEvent::MouseWheel { delta_y } => {
+                if !permissions.allow_mouse {
+                    return;
+                }
+                let btn = if *delta_y > 0.0 { 4 } else { 5 }; // 4 = WheelUp, 5 = WheelDown
+                let _ = conn.fake_input(4, btn, 0, root, 0, 0, 0);
+                let _ = conn.fake_input(5, btn, 0, root, 0, 0, 0);
+                let _ = conn.flush();
+            }
+
+            ControlEvent::Keyboard { vk_code, down } => {
+                if !permissions.allow_keyboard {
+                    return;
+                }
+                if let Some(keycode) = map_vk_to_linux_keycode(*vk_code) {
+                    let ev_type = if *down { 2 } else { 3 }; // 2 = KeyPress, 3 = KeyRelease
+                    let _ = conn.fake_input(ev_type, keycode, 0, root, 0, 0, 0);
+                    let _ = conn.flush();
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (event, permissions);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn map_vk_to_linux_keycode(vk: u16) -> Option<u8> {
+    match vk {
+        0x08 => Some(22),  // BackSpace
+        0x09 => Some(23),  // Tab
+        0x0D => Some(36),  // Enter / Return
+        0x1B => Some(9),   // Escape
+        0x20 => Some(65),  // Space
+        0x25 => Some(113), // Left
+        0x26 => Some(111), // Up
+        0x27 => Some(114), // Right
+        0x28 => Some(116), // Down
+        0x2E => Some(119), // Delete
+        0x10 | 0xA0 => Some(50), // LShift
+        0xA1 => Some(62),        // RShift
+        0x11 | 0xA2 => Some(37), // LControl
+        0xA3 => Some(105),       // RControl
+        0x12 | 0xA4 => Some(64), // LAlt
+        0xA5 => Some(108),       // RAlt / AltGr
+        0x5B => Some(133),       // Super_L (Win)
+        0x5C => Some(134),       // Super_R (Win)
+
+        // Números 0-9
+        0x30 => Some(19), // 0
+        0x31..=0x39 => Some((vk - 0x31 + 10) as u8), // 1-9 -> 10-18
+
+        // Letras A-Z
+        0x41 => Some(38), // A
+        0x42 => Some(56), // B
+        0x43 => Some(54), // C
+        0x44 => Some(40), // D
+        0x45 => Some(26), // E
+        0x46 => Some(41), // F
+        0x47 => Some(42), // G
+        0x48 => Some(43), // H
+        0x49 => Some(31), // I
+        0x4A => Some(44), // J
+        0x4B => Some(45), // K
+        0x4C => Some(46), // L
+        0x4D => Some(58), // M
+        0x4E => Some(57), // N
+        0x4F => Some(32), // O
+        0x50 => Some(33), // P
+        0x51 => Some(24), // Q
+        0x52 => Some(27), // R
+        0x53 => Some(39), // S
+        0x54 => Some(28), // T
+        0x55 => Some(30), // U
+        0x56 => Some(55), // V
+        0x57 => Some(25), // W
+        0x58 => Some(53), // X
+        0x59 => Some(29), // Y
+        0x5A => Some(52), // Z
+
+        // Teclas F1-F12
+        0x70..=0x79 => Some((vk - 0x70 + 67) as u8), // F1-F10 -> 67-76
+        0x7A => Some(95),                            // F11
+        0x7B => Some(96),                            // F12
+
+        _ => None,
     }
 }
