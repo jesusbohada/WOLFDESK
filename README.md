@@ -68,10 +68,27 @@ cargo run --release --bin wolfdesk
 ### Windows
 - Ejecuta `instalar_wolfdesk.bat` o usa el botón **"Instalar WolfDesk"** dentro de la interfaz gráfica.
 
-### Linux
+### Linux (Ubuntu / Debian / Mint / etc.)
+
+En una máquina nueva con Linux, sigue estos pasos desde la terminal:
+
 ```bash
+# 1. Instalar dependencias del sistema y Rust
+sudo apt update && sudo apt install -y build-essential pkg-config libx11-dev libasound2-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev git curl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
+# 2. Descargar el código fuente
+git clone https://github.com/jesusbohada/WOLFDESK.git
+cd WOLFDESK
+
+# 3. Compilar e Instalar en el sistema
+cargo build --release --bin wolfdesk
 sudo bash scripts/install_linux.sh
-# O empaquetar en .deb:
+```
+
+*(Opcional: Si prefieres empaquetar un archivo instalador `.deb`:)*
+```bash
 bash scripts/package_deb.sh
 sudo apt install ./wolfdesk_1.2.0_amd64.deb
 ```
