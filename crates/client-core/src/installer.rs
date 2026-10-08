@@ -297,6 +297,7 @@ fn create_linux_desktop_entry(dest_exe: &Path) -> Result<(), String> {
         dest_exe.display()
     );
     let _ = fs::write("/etc/systemd/system/wolfdesk.service", service_content);
+    let _ = std::process::Command::new("systemctl").arg("daemon-reload").output();
 
     Ok(())
 }
