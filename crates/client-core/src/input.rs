@@ -244,17 +244,17 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
                     MouseButtonType::Right => 3,
                 };
                 let ev_type = if *down { 4 } else { 5 }; // 4 = ButtonPress, 5 = ButtonRelease
-                let _ = conn.fake_input(ev_type, btn_code, 0, root, 0, 0, 0);
+                let _ = conn.xtest_fake_input(ev_type, btn_code, 0, root, 0, 0, 0);
                 let _ = conn.flush();
             }
 
-            ControlEvent::MouseWheel { delta_y } => {
+            ControlEvent::MouseWheel { delta_y, .. } => {
                 if !permissions.allow_mouse {
                     return;
                 }
-                let btn = if *delta_y > 0.0 { 4 } else { 5 }; // 4 = WheelUp, 5 = WheelDown
-                let _ = conn.fake_input(4, btn, 0, root, 0, 0, 0);
-                let _ = conn.fake_input(5, btn, 0, root, 0, 0, 0);
+                let btn = if *delta_y > 0 { 4 } else { 5 }; // 4 = WheelUp, 5 = WheelDown
+                let _ = conn.xtest_fake_input(4, btn, 0, root, 0, 0, 0);
+                let _ = conn.xtest_fake_input(5, btn, 0, root, 0, 0, 0);
                 let _ = conn.flush();
             }
 
@@ -264,7 +264,7 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
                 }
                 if let Some(keycode) = map_vk_to_linux_keycode(*vk_code) {
                     let ev_type = if *down { 2 } else { 3 }; // 2 = KeyPress, 3 = KeyRelease
-                    let _ = conn.fake_input(ev_type, keycode, 0, root, 0, 0, 0);
+                    let _ = conn.xtest_fake_input(ev_type, keycode, 0, root, 0, 0, 0);
                     let _ = conn.flush();
                 }
             }
