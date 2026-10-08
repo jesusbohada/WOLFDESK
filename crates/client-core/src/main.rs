@@ -154,6 +154,10 @@ fn main() -> Result<(), eframe::Error> {
                         let current_q = *quality_for_capture.read().await;
                         match capturer.capture_frame(current_q) {
                             Some(frame) => {
+                                static LOGGED_STREAM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                                if !LOGGED_STREAM.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    log::info!("🚀 [HOST STREAMING] Transmitiendo escritorio en vivo a [{}] ({}x{})", target, frame.width, frame.height);
+                                }
                                 let base64_str = base64::engine::general_purpose::STANDARD.encode(&frame.jpeg_bytes);
                                 let _ = tx_for_capture.send(SignalMessage::VideoFrame {
                                     target_id: target,
@@ -202,6 +206,7 @@ fn main() -> Result<(), eframe::Error> {
                         }
 
                         UiToNet::AcceptIncoming { from_id, permissions } => {
+                            log::info!("✅ [SESIÓN INICIADA] Conexión aceptada para [{}]. Iniciando streaming...", from_id);
                             *active_ctrl_for_ui.write().await = Some(from_id.clone());
                             *active_perm_for_ui.write().await = permissions;
                             let _ = outbound_for_ui.send(SignalMessage::ConnectAccept {
@@ -297,6 +302,7 @@ fn main() -> Result<(), eframe::Error> {
                             });
                             let _ = tx_ui_notify.send(NetToUi::SessionAccepted(target_id));
                         } else {
+                            log::info!("🔔 [SESIÓN ENTRANTE] Solicitud de conexión desde [{}]. Presione '🟢 ACEPTAR' en la pantalla de Linux.", target_id);
                             let _ = tx_ui_notify.send(NetToUi::IncomingRequest(target_id));
                         }
                     }

@@ -231,10 +231,21 @@ impl ScreenCapturer {
                 }
             };
             let root = screen.root;
-            self.screen_w = screen.width_in_pixels as i32;
-            self.screen_h = screen.height_in_pixels as i32;
+            let mut scr_w = screen.width_in_pixels as i32;
+            let mut scr_h = screen.height_in_pixels as i32;
+
+            if let Ok(geom_cookie) = conn.get_geometry(root) {
+                if let Ok(geom) = geom_cookie.reply() {
+                    scr_w = geom.width as i32;
+                    scr_h = geom.height as i32;
+                }
+            }
+
+            self.screen_w = scr_w;
+            self.screen_h = scr_h;
 
             if self.screen_w <= 0 || self.screen_h <= 0 {
+                log::error!("❌ [CAPTURA X11] Dimensiones de pantalla no válidas: {}x{}", self.screen_w, self.screen_h);
                 return None;
             }
 
