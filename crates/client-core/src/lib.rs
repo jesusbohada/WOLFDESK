@@ -8,6 +8,7 @@ pub mod installer;
 pub mod recorder;
 pub mod signaling_client;
 pub mod terminal_log;
+pub mod tray;
 pub mod viewer;
 
 pub use capture::{ScreenCapturer, ScreenFrame};
@@ -20,5 +21,6 @@ pub use installer::{install_to_system, is_installed, uninstall_from_system};
 pub use recorder::SessionRecorder;
 pub use signaling_client::SignalingClient;
 pub use terminal_log::{add_log, get_logs, init_terminal_logger, LogLevel};
+pub use tray::start_system_tray;
 pub use viewer::start_viewer_window;
 

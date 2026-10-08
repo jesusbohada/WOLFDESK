@@ -56,6 +56,8 @@ pub enum NetToUi {
         path: String,
         entries: Vec<proto::FileEntry>,
     },
+    ShowWindow,
+    ExitApp,
 }
 
 pub struct DashboardApp {
@@ -147,15 +149,34 @@ impl DashboardApp {
 
 impl eframe::App for DashboardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+
         let mut visuals = egui::Visuals::dark();
         visuals.window_fill = Color32::from_rgb(18, 22, 31);
         visuals.panel_fill = Color32::from_rgb(14, 17, 24);
         visuals.override_text_color = Some(Color32::from_rgb(226, 232, 240));
         ctx.set_visuals(visuals);
 
-        // 1. Drenar eventos entrantes desde el hilo de red
+        crate::tray::set_egui_context(ctx.clone());
+
+        // Interceptar el cierre de ventana para minimizar a la bandeja del sistema en segundo plano
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            log::info!("🐺 [WOLFDESK] Ventana minimizada a la bandeja del sistema (área de notificación cerca al reloj).");
+        }
+
+        // 1. Drenar eventos entrantes desde el hilo de red o la bandeja
         while let Ok(event) = self.rx_from_net.try_recv() {
             match event {
+                NetToUi::ShowWindow => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                }
+                NetToUi::ExitApp => {
+                    std::process::exit(0);
+                }
                 NetToUi::ServerConnected(id) => {
                     self.my_id = id;
                     self.is_online = true;
@@ -167,6 +188,9 @@ impl eframe::App for DashboardApp {
                 }
                 NetToUi::IncomingRequest(from_id) => {
                     self.incoming_request_from = Some(from_id);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 }
                 NetToUi::SessionAccepted(target) => {
                     self.status_text = format!("🐺 Sesión WolfDesk activa con [{}]", target);

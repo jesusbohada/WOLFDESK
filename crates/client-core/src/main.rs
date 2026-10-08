@@ -90,6 +90,9 @@ fn main() -> Result<(), eframe::Error> {
     let (tx_to_net, mut rx_from_ui) = mpsc::unbounded_channel::<UiToNet>();
     let (tx_to_ui, rx_from_net) = std::sync::mpsc::channel::<NetToUi>();
 
+    // Iniciar el icono de bandeja del sistema (segundo plano permanente junto al reloj)
+    client_core::tray::start_system_tray(&my_id, tx_to_ui.clone());
+
     // Canales de red hacia el servidor WebSocket
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<SignalMessage>();
     let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<SignalMessage>();
