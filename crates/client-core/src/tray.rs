@@ -165,20 +165,33 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
             }
         }
 
-        use ksni::TrayMethods;
-        let tray = WolfDeskLinuxTray {
-            tx_to_ui,
-            my_id: id_clone,
-        };
-        match tray.spawn() {
-            Ok(handle) => {
-                log::info!("🐺 [TRAY LINUX] Icono de bandeja del sistema (KDE Plasma) iniciado con éxito.");
-                std::mem::forget(handle);
-            }
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(r) => r,
             Err(e) => {
-                log::warn!("⚠️ [TRAY LINUX] No se pudo inicializar la bandeja del sistema StatusNotifierItem: {:?}", e);
+                log::error!("⚠️ [TRAY LINUX] Error al iniciar runtime Tokio para el tray: {:?}", e);
+                return;
             }
-        }
+        };
+
+        rt.block_on(async move {
+            use ksni::TrayMethods;
+            let tray = WolfDeskLinuxTray {
+                tx_to_ui,
+                my_id: id_clone,
+            };
+            match tray.spawn().await {
+                Ok(handle) => {
+                    log::info!("🐺 [TRAY LINUX] Icono de bandeja del sistema (KDE Plasma) iniciado con éxito.");
+                    std::mem::forget(handle);
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("⚠️ [TRAY LINUX] No se pudo inicializar la bandeja del sistema StatusNotifierItem: {:?}", e);
+                }
+            }
+        });
     });
 }
 
