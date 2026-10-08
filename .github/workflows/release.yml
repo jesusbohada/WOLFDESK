@@ -1,0 +1,148 @@
+name: Build and Release Multiplatform WolfDesk
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================
+  # 1. BUILD WINDOWS (x86_64)
+  # ==========================================
+  build-windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build WolfDesk Release
+        run: cargo build --release --bin wolfdesk
+
+      - name: Package Windows Artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force
+          Copy-Item target/release/wolfdesk.exe dist/wolfdesk.exe
+          Copy-Item crates/client-core/assets dist/assets -Recurse -Force
+          Copy-Item instalar_wolfdesk.bat dist/instalar_wolfdesk.bat
+          Copy-Item desinstalar_wolfdesk.bat dist/desinstalar_wolfdesk.bat
+          Compress-Archive -Path dist/* -DestinationPath WolfDesk-Windows-x64.zip
+
+      - name: Upload Windows Asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: WolfDesk-Windows-x64
+          path: WolfDesk-Windows-x64.zip
+
+  # ==========================================
+  # 2. BUILD LINUX (x86_64 .deb & .tar.gz)
+  # ==========================================
+  build-linux:
+    name: Linux x86_64 (Debian / Ubuntu / Tarball)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libx11-dev libasound2-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build WolfDesk Release
+        run: cargo build --release --bin wolfdesk
+
+      - name: Build .deb Package and Tarball
+        run: |
+          chmod +x scripts/package_deb.sh scripts/install_linux.sh
+          ./scripts/package_deb.sh
+          
+          # Crear tar.gz portátil
+          mkdir -p dist_linux
+          cp target/release/wolfdesk dist_linux/
+          cp -r crates/client-core/assets dist_linux/
+          cp scripts/install_linux.sh dist_linux/
+          tar -czvf WolfDesk-Linux-x86_64.tar.gz -C dist_linux .
+
+      - name: Upload Linux Assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: WolfDesk-Linux-x86_64
+          path: |
+            *.deb
+            WolfDesk-Linux-x86_64.tar.gz
+
+  # ==========================================
+  # 3. BUILD MACOS (Apple Silicon & Intel)
+  # ==========================================
+  build-macos:
+    name: macOS (Apple Silicon M-series & Intel)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build Universal macOS Binary
+        run: |
+          cargo build --release --bin wolfdesk --target aarch64-apple-darwin
+          cargo build --release --bin wolfdesk --target x86_64-apple-darwin
+          
+          mkdir -p target/release-universal
+          lipo -create \
+            target/aarch64-apple-darwin/release/wolfdesk \
+            target/x86_64-apple-darwin/release/wolfdesk \
+            -output target/release-universal/wolfdesk
+
+      - name: Package macOS .app & .dmg
+        run: |
+          chmod +x scripts/package_macos.sh
+          ./scripts/package_macos.sh target/release-universal/wolfdesk
+
+      - name: Upload macOS Asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: WolfDesk-macOS
+          path: WolfDesk-macOS-Universal.dmg
+
+  # ==========================================
+  # 4. PUBLISH GITHUB RELEASE
+  # ==========================================
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            WolfDesk-Windows-x64/WolfDesk-Windows-x64.zip
+            WolfDesk-Linux-x86_64/*.deb
+            WolfDesk-Linux-x86_64/WolfDesk-Linux-x86_64.tar.gz
+            WolfDesk-macOS/WolfDesk-macOS-Universal.dmg
+          draft: false
+          prerelease: false

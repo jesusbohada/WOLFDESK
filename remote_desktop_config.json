@@ -1,0 +1,16 @@
+{
+  "server_url": "ws://127.0.0.1:9050/ws",
+  "stun_servers": [
+    "stun.l.google.com:19302",
+    "stun1.l.google.com:19302",
+    "stun.cloudflare.com:3478"
+  ],
+  "unattended_password_hash": null,
+  "default_permissions": {
+    "allow_mouse": true,
+    "allow_keyboard": true,
+    "allow_clipboard": true,
+    "allow_file_transfer": true
+  },
+  "recent_ids": []
+}

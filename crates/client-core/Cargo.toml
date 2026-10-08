@@ -1,0 +1,37 @@
+[package]
+name = "client-core"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "wolfdesk"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.20"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+proto = { path = "../proto" }
+url = "2.4"
+log = "0.4"
+env_logger = "0.10"
+image = { version = "0.24", default-features = false, features = ["jpeg", "png"] }
+minifb = "0.25"
+base64 = "0.21"
+eframe = "0.26"
+egui = "0.26"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.52", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Foundation"
+] }
+
+[build-dependencies]
+winres = "0.1"
+image = { version = "0.24", default-features = false, features = ["jpeg", "png"] }

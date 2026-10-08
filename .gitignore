@@ -1,0 +1,40 @@
+# Rust target directory
+/target/
+target/
+
+# IDE and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Sensitive and Local Machine Identities
+identity.json
+**/identity.json
+*.pfx
+*.pem
+*.key
+
+# Application runtime outputs and downloads
+WolfDesk_Downloads/
+*.log
+
+# Build distribution and packaging artifacts
+dist/
+dist_linux/
+dist_macos/
+*.deb
+*.rpm
+*.dmg
+*.AppImage
+*.tar.gz
+*.zip
+*.exe
+*.pdb
+
+# InnoSetup output
+Output/

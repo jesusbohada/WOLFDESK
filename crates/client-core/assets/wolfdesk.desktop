@@ -1,0 +1,18 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WolfDesk Pro
+GenericName=Remote Desktop
+Comment=Fast, secure and ultra-low latency remote desktop client
+Exec=wolfdesk %u
+Icon=wolfdesk
+Terminal=false
+Categories=Network;RemoteAccess;Utility;
+Keywords=remote;desktop;anydesk;teamviewer;vnc;rdp;wolfdesk;
+StartupWMClass=wolfdesk
+MimeType=x-scheme-handler/wolfdesk;
+Actions=NewConnection;
+
+[Desktop Action NewConnection]
+Name=New Connection
+Exec=wolfdesk
