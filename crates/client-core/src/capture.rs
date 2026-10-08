@@ -19,8 +19,19 @@ use x11rb::protocol::xproto::{ConnectionExt as XProtoExt, ImageFormat};
 
 #[cfg(target_os = "linux")]
 fn ensure_linux_x11_auth() {
+    static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
     let _ = std::process::Command::new("xhost").arg("+local:").output();
     let _ = std::process::Command::new("xhost").arg("+").output();
+
+    // Suspender el compositor KWin de KDE Plasma para evitar que el búfer X11 quede en negro
+    let _ = std::process::Command::new("qdbus").args(["org.kde.KWin", "/Compositor", "suspend"]).output();
+    let _ = std::process::Command::new("qdbus-qt5").args(["org.kde.KWin", "/Compositor", "suspend"]).output();
+    let _ = std::process::Command::new("kwriteconfig5").args(["--file", "kwinrc", "--group", "Compositing", "--key", "Enabled", "false"]).output();
+    let _ = std::process::Command::new("su").args(["caja", "-c", "xhost +local: ; qdbus org.kde.KWin /Compositor suspend 2>/dev/null"]).output();
 
     if std::env::var("DISPLAY").is_err() {
         std::env::set_var("DISPLAY", ":0");
@@ -299,6 +310,16 @@ impl ScreenCapturer {
             } else {
                 return None;
             };
+
+            let is_all_black = raw_data.iter().take(4000).all(|&b| b == 0);
+            if is_all_black {
+                static LOGGED_BLACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !LOGGED_BLACK.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    log::warn!("⚠️ [CAPTURA X11] Búfer de pantalla en negro detectado (KWin Compositor activo). Suspendiendo compositor KWin...");
+                    let _ = std::process::Command::new("qdbus").args(["org.kde.KWin", "/Compositor", "suspend"]).output();
+                    let _ = std::process::Command::new("su").args(["caja", "-c", "qdbus org.kde.KWin /Compositor suspend 2>/dev/null"]).output();
+                }
+            }
 
             let mut rgb_pixels = Vec::with_capacity((target_w * target_h * 3) as usize);
             if target_w == self.screen_w && target_h == self.screen_h {
