@@ -43,15 +43,75 @@ pub struct RemoteUpdateInfo {
     pub date: String,
 }
 
+/// Construye un PATH enriquecido para encontrar Cargo, Rustup, Git y utilidades en Linux o Windows
+pub fn get_augmented_path() -> String {
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let mut parts: Vec<String> = Vec::new();
+
+    let candidate_dirs = [
+        "/home/caja/.cargo/bin",
+        "/root/.cargo/bin",
+        "/usr/local/cargo/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ];
+
+    for dir in &candidate_dirs {
+        if Path::new(dir).exists() {
+            parts.push(dir.to_string());
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home).join(".cargo/bin");
+        if p.exists() {
+            parts.push(p.to_string_lossy().to_string());
+        }
+    }
+
+    parts.push(current_path);
+    parts.join(if cfg!(windows) { ";" } else { ":" })
+}
+
+/// Localiza de forma determinista la ruta al binario de Cargo
+pub fn find_cargo_executable() -> PathBuf {
+    let candidate_files = [
+        "/home/caja/.cargo/bin/cargo",
+        "/root/.cargo/bin/cargo",
+        "/usr/local/cargo/bin/cargo",
+        "/usr/local/bin/cargo",
+        "/usr/bin/cargo",
+    ];
+
+    for file in &candidate_files {
+        let p = Path::new(file);
+        if p.exists() {
+            return p.to_path_buf();
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home).join(".cargo/bin/cargo");
+        if p.exists() {
+            return p;
+        }
+    }
+
+    PathBuf::from("cargo")
+}
+
 /// Comprueba en el repositorio GitHub oficial si existe una versión más reciente
 pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
     let local_hash = get_build_git_hash();
+    let augmented_path = get_augmented_path();
 
     // Intento 1: Consultar la API de GitHub mediante curl (rápido, trae mensaje de commit y fecha)
     let curl_cmd = if cfg!(windows) { "curl.exe" } else { "curl" };
     let api_url = "https://api.github.com/repos/jesusbohada/WOLFDESK/commits/main";
 
     if let Ok(output) = Command::new(curl_cmd)
+        .env("PATH", &augmented_path)
         .args(["-s", "--connect-timeout", "6", "-H", "User-Agent: WolfDesk", api_url])
         .output()
     {
@@ -91,6 +151,7 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
 
     // Intento 2: Usar git ls-remote directamente (sin límites de rate limit de API)
     if let Ok(output) = Command::new("git")
+        .env("PATH", &augmented_path)
         .args(["ls-remote", "https://github.com/jesusbohada/WOLFDESK.git", "HEAD"])
         .output()
     {
@@ -160,9 +221,49 @@ where
         }
     };
 
+    let augmented_path = get_augmented_path();
+
+    // 1. Si existe scripts/update.sh en Linux, podemos invocarlo pasando el PATH adecuado
+    #[cfg(target_os = "linux")]
+    {
+        let update_script = repo_dir.join("scripts/update.sh");
+        if update_script.exists() {
+            report_step("Descargando cambios y compilando con scripts/update.sh...");
+            let res = Command::new("bash")
+                .arg(&update_script)
+                .env("PATH", &augmented_path)
+                .output();
+            match res {
+                Ok(out) if out.status.success() => {
+                    let commit_hash = Command::new("git")
+                        .current_dir(&repo_dir)
+                        .env("PATH", &augmented_path)
+                        .args(["rev-parse", "--short", "HEAD"])
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .unwrap_or_else(|| "nuevo".to_string());
+
+                    let final_msg = format!("WolfDesk actualizado exitosamente al commit [{}]. Reinicie para aplicar.", commit_hash.trim());
+                    report_step(&final_msg);
+                    return Ok(final_msg);
+                }
+                Ok(out) => {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    log::warn!("Aviso en scripts/update.sh: {}", err);
+                    // Continuar al procedimiento estándar integrado
+                }
+                Err(e) => {
+                    log::warn!("No se pudo invocar scripts/update.sh: {}", e);
+                }
+            }
+        }
+    }
+
     report_step("Descargando últimos cambios desde GitHub (git fetch y pull)...");
     let fetch_res = Command::new("git")
         .current_dir(&repo_dir)
+        .env("PATH", &augmented_path)
         .args(["fetch", "origin", "main"])
         .output();
     if let Err(e) = fetch_res {
@@ -171,15 +272,18 @@ where
 
     let pull_res = Command::new("git")
         .current_dir(&repo_dir)
+        .env("PATH", &augmented_path)
         .args(["pull", "origin", "main"])
         .output();
     if let Err(e) = pull_res {
         return Err(format!("Error al ejecutar git pull: {}", e));
     }
 
-    report_step("Compilando nueva versión optimizada con Cargo (esto puede tardar unos segundos)...");
-    let cargo_res = Command::new("cargo")
+    report_step("Compilando nueva versión optimizada con Cargo (Release)...");
+    let cargo_bin = find_cargo_executable();
+    let cargo_res = Command::new(&cargo_bin)
         .current_dir(&repo_dir)
+        .env("PATH", &augmented_path)
         .args(["build", "--release", "--bin", "wolfdesk"])
         .output();
 
@@ -192,7 +296,7 @@ where
             return Err(format!("Fallo en la compilación de Cargo: {}", stderr));
         }
         Err(e) => {
-            return Err(format!("Error al invocar cargo: {}", e));
+            return Err(format!("Error al invocar cargo ({:?}): {}", cargo_bin, e));
         }
     }
 
@@ -208,6 +312,7 @@ where
     {
         if Path::new("/opt/wolfdesk").exists() {
             let dest = Path::new("/opt/wolfdesk/wolfdesk");
+            let _ = std::fs::remove_file(dest); // Desvincular inodo previo para evitar 'Text file busy'
             let _ = std::fs::copy(&new_binary, dest);
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755));
@@ -235,6 +340,7 @@ where
 
     let commit_hash = Command::new("git")
         .current_dir(&repo_dir)
+        .env("PATH", &augmented_path)
         .args(["rev-parse", "--short", "HEAD"])
         .output()
         .ok()
@@ -254,6 +360,12 @@ mod tests {
     fn test_local_version_and_hash() {
         assert!(!get_local_version().is_empty());
         assert!(!get_build_git_hash().is_empty());
+    }
+
+    #[test]
+    fn test_augmented_path() {
+        let path = get_augmented_path();
+        assert!(!path.is_empty());
     }
 
     #[test]

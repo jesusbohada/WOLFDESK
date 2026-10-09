@@ -62,7 +62,7 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
                     if let Ok(hmenu) = CreatePopupMenu() {
                         let _ = AppendMenuW(hmenu, MF_STRING, 1001, w!("🐺 Abrir WolfDesk"));
                         let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
-                        let _ = AppendMenuW(hmenu, MF_STRING, 1002, w!("🔴 Salir de WolfDesk"));
+                        let _ = AppendMenuW(hmenu, MF_STRING, 1002, w!("🔄 Salir y Reiniciar WolfDesk"));
 
                         let mut pt = POINT::default();
                         let _ = GetCursorPos(&mut pt);
@@ -83,7 +83,7 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
                             nid.hWnd = hwnd;
                             nid.uID = 1;
                             let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
-                            std::process::exit(0);
+                            crate::restart_application();
                         }
                     }
                 }
@@ -337,9 +337,9 @@ impl ksni::Tray for WolfDeskLinuxTray {
             }.into(),
             MenuItem::Separator,
             StandardItem {
-                label: "🔴 Salir de WolfDesk".into(),
+                label: "🔄 Salir de WolfDesk (Reiniciar Servicio)".into(),
                 activate: Box::new(|_| {
-                    std::process::exit(0);
+                    crate::restart_application();
                 }),
                 ..Default::default()
             }.into(),

@@ -191,7 +191,7 @@ impl eframe::App for DashboardApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 }
                 NetToUi::ExitApp => {
-                    std::process::exit(0);
+                    crate::restart_application();
                 }
                 NetToUi::ServerConnected(id) => {
                     self.my_id = id;
@@ -948,6 +948,10 @@ impl DashboardApp {
                 }
                 crate::updater::UpdateStatus::Success { message } => {
                     ui.label(RichText::new(format!("🎉 {}", message)).strong().color(Color32::from_rgb(52, 211, 153)));
+                    ui.add_space(5.0);
+                    if ui.add(egui::Button::new(RichText::new("🔄 Reiniciar WolfDesk Ahora").color(Color32::WHITE).strong()).fill(Color32::from_rgb(14, 116, 144))).clicked() {
+                        crate::restart_application();
+                    }
                 }
                 crate::updater::UpdateStatus::Error { message } => {
                     ui.label(RichText::new(format!("❌ Error: {}", message)).color(Color32::from_rgb(239, 68, 68)));

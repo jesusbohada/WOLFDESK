@@ -16,7 +16,16 @@ echo -e "${BLUE}====================================================${NC}"
 echo -e "${BLUE}        🐺 WolfDesk - Actualizador del Sistema       ${NC}"
 echo -e "${BLUE}====================================================${NC}"
 
-# 1. Localizar el directorio del repositorio
+# 1. Asegurar entorno PATH completo para Cargo, Rustup y utilidades del sistema
+for env_file in "$HOME/.cargo/env" "/home/caja/.cargo/env" "/root/.cargo/env"; do
+    if [ -f "$env_file" ]; then
+        source "$env_file" || true
+        break
+    fi
+done
+export PATH="$HOME/.cargo/bin:/home/caja/.cargo/bin:/root/.cargo/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# 2. Localizar el directorio del repositorio
 REPO_DIR=""
 if [ -d "/home/caja/WOLFDESK/.git" ]; then
     REPO_DIR="/home/caja/WOLFDESK"
@@ -37,13 +46,13 @@ fi
 echo -e "${BLUE}[*] Directorio de trabajo:${NC} ${YELLOW}$REPO_DIR${NC}"
 cd "$REPO_DIR"
 
-# 2. Descargar los últimos cambios desde GitHub
+# 3. Descargar los últimos cambios desde GitHub
 echo -e "${BLUE}[*] Descargando últimos cambios desde GitHub (git pull origin main)...${NC}"
 git fetch origin main
 git checkout main
 git pull origin main
 
-# 3. Compilar el binario optimizado
+# 4. Compilar el binario optimizado
 echo -e "${BLUE}[*] Compilando la versión más reciente con Cargo (Release)...${NC}"
 cargo build --release --bin wolfdesk
 
@@ -53,9 +62,10 @@ if [ ! -f "$NEW_BIN" ]; then
     exit 1
 fi
 
-# 4. Actualizar la instalación en /opt/wolfdesk si existe
+# 5. Actualizar la instalación en /opt/wolfdesk si existe
 if [ -d "/opt/wolfdesk" ]; then
     echo -e "${BLUE}[*] Actualizando binario en /opt/wolfdesk/wolfdesk...${NC}"
+    rm -f /opt/wolfdesk/wolfdesk 2>/dev/null || true
     cp -f "$NEW_BIN" /opt/wolfdesk/wolfdesk
     chmod 755 /opt/wolfdesk/wolfdesk
     if [ -f "$REPO_DIR/crates/client-core/assets/wolfdesk.png" ]; then
