@@ -27,11 +27,12 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
         };
         use windows::Win32::UI::WindowsAndMessaging::{
             AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-            DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW,
-            RegisterClassW, SetForegroundWindow, TrackPopupMenuEx, TranslateMessage,
+            DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW, LoadIconW,
+            RegisterClassW, SetForegroundWindow, ShowWindow, TrackPopupMenuEx, TranslateMessage,
             HMENU, HICON, MSG, TPM_NONOTIFY, TPM_RETURNCMD,
             WNDCLASSW, WS_OVERLAPPED, CW_USEDEFAULT, IDI_APPLICATION,
             MF_SEPARATOR, MF_STRING, WM_APP, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
+            SW_RESTORE, SW_SHOW,
         };
 
         const WM_TRAYICON: u32 = WM_APP + 100;
@@ -58,6 +59,12 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
                             wake_ui();
                         }
                     }
+                    let hwnd_main = FindWindowW(None, w!("WolfDesk Pro - Escritorio Remoto"));
+                    if hwnd_main.0 != 0 {
+                        let _ = ShowWindow(hwnd_main, SW_SHOW);
+                        let _ = ShowWindow(hwnd_main, SW_RESTORE);
+                        let _ = SetForegroundWindow(hwnd_main);
+                    }
                 } else if mouse_ev == WM_RBUTTONUP {
                     if let Ok(hmenu) = CreatePopupMenu() {
                         let _ = AppendMenuW(hmenu, MF_STRING, 1001, w!("🐺 Abrir WolfDesk"));
@@ -76,6 +83,12 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
                                     let _ = tx.send(crate::dashboard::NetToUi::ShowWindow);
                                     wake_ui();
                                 }
+                            }
+                            let hwnd_main = FindWindowW(None, w!("WolfDesk Pro - Escritorio Remoto"));
+                            if hwnd_main.0 != 0 {
+                                let _ = ShowWindow(hwnd_main, SW_SHOW);
+                                let _ = ShowWindow(hwnd_main, SW_RESTORE);
+                                let _ = SetForegroundWindow(hwnd_main);
                             }
                         } else if cmd.0 == 1002 {
                             let mut nid = NOTIFYICONDATAW::default();

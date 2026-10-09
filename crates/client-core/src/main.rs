@@ -69,6 +69,19 @@ fn main() -> Result<(), eframe::Error> {
         let mut buf = [0u8; 16];
         if let Ok((len, _)) = socket.recv_from(&mut buf) {
             if &buf[..len] == b"OK" {
+                #[cfg(windows)]
+                unsafe {
+                    use windows::core::w;
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+                    };
+                    let hwnd = FindWindowW(None, w!("WolfDesk Pro - Escritorio Remoto"));
+                    if hwnd.0 != 0 {
+                        let _ = ShowWindow(hwnd, SW_SHOW);
+                        let _ = ShowWindow(hwnd, SW_RESTORE);
+                        let _ = SetForegroundWindow(hwnd);
+                    }
+                }
                 println!("🐺 WolfDesk ya está activo en segundo plano. Restaurando ventana al primer plano...");
                 return Ok(());
             }
@@ -139,6 +152,19 @@ fn main() -> Result<(), eframe::Error> {
                     let _ = listener.send_to(b"OK", src);
                     let _ = tx_ui.send(NetToUi::ShowWindow);
                     client_core::tray::wake_ui();
+                    #[cfg(windows)]
+                    unsafe {
+                        use windows::core::w;
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+                        };
+                        let hwnd = FindWindowW(None, w!("WolfDesk Pro - Escritorio Remoto"));
+                        if hwnd.0 != 0 {
+                            let _ = ShowWindow(hwnd, SW_SHOW);
+                            let _ = ShowWindow(hwnd, SW_RESTORE);
+                            let _ = SetForegroundWindow(hwnd);
+                        }
+                    }
                 }
             }
         });
