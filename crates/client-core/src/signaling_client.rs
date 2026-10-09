@@ -17,59 +17,93 @@ impl SignalingClient {
         }
     }
 
-    /// Inicia el bucle de conexión con el servidor de señalización
+    /// Inicia el bucle de conexión con el servidor de señalización con reconexión automática permanente
     pub async fn start(
         &self,
         mut outbound_rx: mpsc::UnboundedReceiver<SignalMessage>,
         inbound_tx: mpsc::UnboundedSender<SignalMessage>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = Url::parse(&self.server_url)?;
-        log::info!("Conectando al servidor de señalización: {}", url);
 
-        let (ws_stream, _) = connect_async(url).await?;
-        let (mut write, mut read) = ws_stream.split();
+        loop {
+            log::info!("Conectando al servidor de señalización: {}", url);
 
-        // 1. Envía mensaje de registro inicial con el ID de 9 dígitos y la clave pública
-        let reg_msg = SignalMessage::Register {
-            client_id: self.identity.numeric_id.clone(),
-            public_key: self.identity.public_key_hex(),
-        };
-        let reg_json = serde_json::to_string(&reg_msg)?;
-        write.send(Message::Text(reg_json)).await?;
-        log::info!("Registrado en el servidor con ID: {}", self.identity.numeric_id);
-
-        // Tarea para enviar mensajes que salgan de la aplicación hacia el servidor
-        let send_task = tokio::spawn(async move {
-            while let Some(msg) = outbound_rx.recv().await {
-                if let Ok(json) = serde_json::to_string(&msg) {
-                    if write.send(Message::Text(json)).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        });
-
-        // Bucle para recibir mensajes entrantes del servidor
-        while let Some(msg_result) = read.next().await {
-            match msg_result {
-                Ok(Message::Text(text)) => {
-                    if let Ok(signal_msg) = serde_json::from_str::<SignalMessage>(&text) {
-                        let _ = inbound_tx.send(signal_msg);
-                    }
-                }
-                Ok(Message::Close(_)) => {
-                    log::warn!("Conexión cerrada por el servidor de señalización.");
-                    break;
-                }
+            let (ws_stream, _) = match connect_async(url.clone()).await {
+                Ok(stream) => stream,
                 Err(e) => {
-                    log::error!("Error en la conexión WebSocket: {}", e);
-                    break;
+                    log::warn!("No se pudo conectar al servidor de señalización: {}. Reintentando en 3s...", e);
+                    let _ = inbound_tx.send(SignalMessage::Error {
+                        message: "Sin conexión con el servidor de señalización. Reconectando...".to_string(),
+                    });
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    continue;
                 }
-                _ => {}
-            }
-        }
+            };
 
-        send_task.abort();
-        Ok(())
+            let (mut write, mut read) = ws_stream.split();
+
+            // 1. Envía mensaje de registro inicial con el ID de 9 dígitos y la clave pública
+            let reg_msg = SignalMessage::Register {
+                client_id: self.identity.numeric_id.clone(),
+                public_key: self.identity.public_key_hex(),
+            };
+            if let Ok(reg_json) = serde_json::to_string(&reg_msg) {
+                if write.send(Message::Text(reg_json)).await.is_err() {
+                    log::warn!("Error al enviar registro de cliente. Reintentando...");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+            }
+            log::info!("Registrado en el servidor con ID: {}", self.identity.numeric_id);
+
+            // Bucle principal concurrente de envío y recepción
+            loop {
+                tokio::select! {
+                    msg_opt = outbound_rx.recv() => {
+                        match msg_opt {
+                            Some(msg) => {
+                                if let Ok(json) = serde_json::to_string(&msg) {
+                                    if write.send(Message::Text(json)).await.is_err() {
+                                        log::warn!("Error al enviar mensaje por WebSocket. Reconectando...");
+                                        break;
+                                    }
+                                }
+                            }
+                            None => {
+                                log::warn!("Canal de salida cerrado.");
+                                return Ok(());
+                            }
+                        }
+                    }
+                    read_opt = read.next() => {
+                        match read_opt {
+                            Some(Ok(Message::Text(text))) => {
+                                if let Ok(signal_msg) = serde_json::from_str::<SignalMessage>(&text) {
+                                    let _ = inbound_tx.send(signal_msg);
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) => {
+                                log::warn!("Conexión cerrada por el servidor de señalización. Reconectando...");
+                                break;
+                            }
+                            Some(Err(e)) => {
+                                log::warn!("Error en la conexión WebSocket: {}. Reconectando...", e);
+                                break;
+                            }
+                            None => {
+                                log::warn!("Flujo WebSocket terminado. Reconectando...");
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            let _ = inbound_tx.send(SignalMessage::Error {
+                message: "Conexión perdida con el servidor. Reconectando automáticamente...".to_string(),
+            });
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        }
     }
 }

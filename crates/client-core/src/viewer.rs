@@ -195,6 +195,13 @@ fn draw_button(
         } else {
             (0x450A0A, 0x7F1D1D, 0xFCA5A5)
         }
+    } else if accent_color == 0xF59E0B || accent_color == 0xEAB308 {
+        // Alerta de reconexión / Advertencia
+        if is_hovered {
+            (0x452E0B, 0xFBBF24, 0xFFFFFF)
+        } else {
+            (0x2E1F05, 0xF59E0B, 0xFDE68A)
+        }
     } else if is_hovered {
         (0x27354A, 0x00E5FF, 0xFFFFFF)
     } else {
@@ -329,11 +336,14 @@ unsafe extern "system" fn low_level_keyboard_proc(
     CallNextHookEx(HHOOK(0), n_code, wparam, lparam)
 }
 
+pub static VIEWER_IS_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn start_viewer_window(
     title: &str,
     frame_rx: mpsc::Receiver<Vec<u8>>,
     control_tx: tokio::sync::mpsc::UnboundedSender<ControlEvent>,
 ) {
+    VIEWER_IS_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
     let initial_width = 1600;
     let initial_height = 900;
     let mut buffer: Vec<u32> = vec![0x080C14; initial_width * initial_height];
@@ -389,6 +399,8 @@ pub fn start_viewer_window(
     let mut recorder = SessionRecorder::new();
     let mut f9_was_pressed = false;
     let mut f5_was_pressed = false;
+    let mut last_frame_time = std::time::Instant::now();
+    let mut had_first_frame = false;
 
     // Perfiles dinámicos: por defecto HD Nativa (88%)
     let mut quality_tier = 2u8; // 0=40%, 1=70%, 2=88%, 3=96%
@@ -454,6 +466,8 @@ pub fn start_viewer_window(
         }
 
         if let Some(jpeg_bytes) = latest_frame {
+            had_first_frame = true;
+            last_frame_time = std::time::Instant::now();
             if let Ok(img) = image::load_from_memory(&jpeg_bytes) {
                 let rgb = img.to_rgb8();
                 let (w, h) = rgb.dimensions();
@@ -761,6 +775,17 @@ pub fn start_viewer_window(
             draw_button(&mut buffer, client_w, client_h, btn_mostrar_rect, "Menú", is_over_mini_menu, false, 0);
         }
 
+        let is_reconnecting = had_first_frame && last_frame_time.elapsed() > Duration::from_secs(4);
+        if is_reconnecting {
+            let elapsed = last_frame_time.elapsed().as_secs();
+            let banner_txt = format!("Reconectando con el puesto remoto... ({}s)", elapsed);
+            let bw = 380;
+            let bh = 28;
+            let bx = if client_w > bw { (client_w - bw) / 2 } else { 10 };
+            let by = TOOLBAR_HEIGHT + 8;
+            draw_button(&mut buffer, client_w, client_h, (bx, by, bw, bh), &banner_txt, false, false, 0xF59E0B);
+        }
+
         // 11. Eventos de teclado con repetición continua (elimina continuamente al mantener pulsado Backspace)
         let pressed_keys = window.get_keys_pressed(KeyRepeat::Yes);
         for key in pressed_keys {
@@ -790,7 +815,8 @@ pub fn start_viewer_window(
 
         // 12. Título dinámico
         let rec_tag = if recorder.is_recording { " | 🔴 GRABANDO" } else { "" };
-        let dynamic_title = format!("{} | {} | {} {}", title, current_quality_label, current_scale_mode.label(), rec_tag);
+        let reconn_tag = if is_reconnecting { " | ⚠️ Reconectando..." } else { "" };
+        let dynamic_title = format!("{} | {} | {}{}{}", title, current_quality_label, current_scale_mode.label(), rec_tag, reconn_tag);
         window.set_title(&dynamic_title);
 
         let _ = window.update_with_buffer(&buffer, client_w, client_h);
@@ -810,4 +836,6 @@ pub fn start_viewer_window(
     if recorder.is_recording {
         recorder.stop();
     }
+
+    VIEWER_IS_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
 }

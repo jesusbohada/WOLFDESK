@@ -14,6 +14,7 @@ struct Peer {
 }
 
 type Peers = Arc<RwLock<HashMap<String, Peer>>>;
+type Sessions = Arc<RwLock<HashMap<String, String>>>;
 
 /// Normaliza cualquier ID eliminando espacios, guiones o puntos: "151 245 721" -> "151245721"
 fn normalize_id(id: &str) -> String {
@@ -25,20 +26,25 @@ async fn main() {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let peers: Peers = Arc::new(RwLock::new(HashMap::new()));
+    let sessions: Sessions = Arc::new(RwLock::new(HashMap::new()));
+
     let peers_filter = warp::any().map(move || peers.clone());
+    let sessions_filter = warp::any().map(move || sessions.clone());
 
     let ws_route = warp::path("ws")
         .and(warp::ws())
         .and(peers_filter.clone())
-        .map(|ws: warp::ws::Ws, peers| {
-            ws.on_upgrade(move |socket| handle_client(socket, peers))
+        .and(sessions_filter.clone())
+        .map(|ws: warp::ws::Ws, peers, sessions| {
+            ws.on_upgrade(move |socket| handle_client(socket, peers, sessions))
         });
 
     let ws_root = warp::path::end()
         .and(warp::ws())
         .and(peers_filter.clone())
-        .map(|ws: warp::ws::Ws, peers| {
-            ws.on_upgrade(move |socket| handle_client(socket, peers))
+        .and(sessions_filter.clone())
+        .map(|ws: warp::ws::Ws, peers, sessions| {
+            ws.on_upgrade(move |socket| handle_client(socket, peers, sessions))
         });
 
     let health_route = warp::path("health")
@@ -61,7 +67,7 @@ async fn main() {
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
 }
 
-async fn handle_client(ws: WebSocket, peers: Peers) {
+async fn handle_client(ws: WebSocket, peers: Peers, sessions: Sessions) {
     let (mut ws_tx, mut ws_rx) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
 
@@ -138,6 +144,11 @@ async fn handle_client(ws: WebSocket, peers: Peers) {
 
                 Ok(ConnectAccept { from_id, permissions }) => {
                     println!(">> [WOLFDESK] Sesión aceptada por '{}' con permisos: {:?}", from_id, permissions);
+                    if let Some(ref my_norm) = current_norm_id {
+                        let target_norm = normalize_id(&from_id);
+                        sessions.write().await.insert(my_norm.clone(), target_norm.clone());
+                        sessions.write().await.insert(target_norm, my_norm.clone());
+                    }
                     forward_to_target(&peers, &from_id, ConnectAccept { from_id: current_raw_id.clone().unwrap_or_default(), permissions }).await;
                 }
 
@@ -148,6 +159,11 @@ async fn handle_client(ws: WebSocket, peers: Peers) {
 
                 Ok(Disconnect { target_id, reason }) => {
                     println!(">> [WOLFDESK] Sesión finalizada: {}", reason);
+                    let target_norm = normalize_id(&target_id);
+                    if let Some(ref my_norm) = current_norm_id {
+                        sessions.write().await.remove(my_norm);
+                        sessions.write().await.remove(&target_norm);
+                    }
                     forward_to_target(&peers, &target_id, Disconnect { target_id: current_raw_id.clone().unwrap_or_default(), reason }).await;
                 }
 
@@ -229,6 +245,19 @@ async fn handle_client(ws: WebSocket, peers: Peers) {
     if let Some(norm) = current_norm_id {
         peers.write().await.remove(&norm);
         println!(">> [WOLFDESK] Cliente desconectado: ID='{}'", current_raw_id.as_deref().unwrap_or(&norm));
+
+        if let Some(peer_norm) = sessions.write().await.remove(&norm) {
+            sessions.write().await.remove(&peer_norm);
+            let raw_from = current_raw_id.unwrap_or_else(|| norm.clone());
+            forward_to_target(
+                &peers,
+                &peer_norm,
+                Disconnect {
+                    target_id: raw_from,
+                    reason: "El equipo remoto ha perdido la conexión de red o se ha cerrado.".to_string(),
+                },
+            ).await;
+        }
     }
 }
 

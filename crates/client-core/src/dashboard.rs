@@ -44,6 +44,24 @@ pub enum UiToNet {
     UpdateConfig(AppConfig),
     CheckForUpdates,
     TriggerUpdate,
+    DisconnectActive,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum RemoteSessionState {
+    Idle,
+    Connecting { target_id: String },
+    Connected { target_id: String },
+    Reconnecting {
+        target_id: String,
+        attempt: u32,
+        max_attempts: u32,
+        countdown: f32,
+    },
+    ConnectionLost {
+        target_id: String,
+        reason: String,
+    },
 }
 
 pub enum NetToUi {
@@ -53,6 +71,7 @@ pub enum NetToUi {
     SessionAccepted(String),
     SessionRejected(String),
     SessionError(String),
+    SessionDisconnected { target_id: String, reason: String },
     ChatReceived { from_id: String, text: String },
     FileStatus(String),
     RemoteFilesReceived {
@@ -122,6 +141,12 @@ pub struct DashboardApp {
     pub install_feedback: Option<String>,
     pub terminal_command: String,
 
+    // Reconexión automática y reestablecimiento de sesión
+    pub saved_target_id: String,
+    pub saved_password: Option<String>,
+    pub remote_session_state: RemoteSessionState,
+    pub last_tick: std::time::Instant,
+
     // Canales de comunicación con el motor de red
     pub tx_to_net: tokio::sync::mpsc::UnboundedSender<UiToNet>,
     pub rx_from_net: Receiver<NetToUi>,
@@ -176,6 +201,10 @@ impl DashboardApp {
             show_install_dialog: false,
             install_feedback: None,
             terminal_command: String::new(),
+            saved_target_id: String::new(),
+            saved_password: None,
+            remote_session_state: RemoteSessionState::Idle,
+            last_tick: std::time::Instant::now(),
             tx_to_net,
             rx_from_net,
         }
@@ -184,7 +213,33 @@ impl DashboardApp {
 
 impl eframe::App for DashboardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+
+        let dt = self.last_tick.elapsed().as_secs_f32().min(1.0);
+        self.last_tick = std::time::Instant::now();
+
+        // Máquina de estados de reconexión automática periódica
+        if let RemoteSessionState::Reconnecting { ref target_id, ref mut attempt, max_attempts, ref mut countdown } = self.remote_session_state {
+            *countdown -= dt;
+            if *countdown <= 0.0 {
+                if *attempt < max_attempts {
+                    *attempt += 1;
+                    *countdown = 3.0;
+                    self.status_text = format!("⚠️ Reconectando automáticamente con [{}]... (Intento {} de {})", target_id, attempt, max_attempts);
+                    let _ = self.tx_to_net.send(UiToNet::Connect {
+                        target_id: target_id.clone(),
+                        password: self.saved_password.clone(),
+                    });
+                } else {
+                    let tid = target_id.clone();
+                    self.remote_session_state = RemoteSessionState::ConnectionLost {
+                        target_id: tid.clone(),
+                        reason: "El puesto remoto no responde tras 5 intentos automáticos de reconexión.".to_string(),
+                    };
+                    self.status_text = format!("⚠️ Conexión perdida con [{}].", tid);
+                }
+            }
+        }
 
         let mut visuals = egui::Visuals::dark();
         visuals.window_fill = Color32::from_rgb(18, 22, 31);
@@ -228,6 +283,7 @@ impl eframe::App for DashboardApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 }
                 NetToUi::SessionAccepted(target) => {
+                    self.remote_session_state = RemoteSessionState::Connected { target_id: target.clone() };
                     self.status_text = format!("🐺 Sesión WolfDesk activa con [{}]", target);
                     self.active_peer_id = Some(target.clone());
                     self.config.add_recent_id(&target);
@@ -236,14 +292,69 @@ impl eframe::App for DashboardApp {
                         path: ".".to_string(),
                     });
                 }
+                NetToUi::SessionDisconnected { target_id, reason } => {
+                    self.active_peer_id = None;
+                    self.remote_file_entries.clear();
+                    self.selected_remote_file = None;
+
+                    let target = if !self.saved_target_id.is_empty() {
+                        self.saved_target_id.clone()
+                    } else {
+                        target_id
+                    };
+
+                    // Iniciar auto-reconexión primero
+                    self.remote_session_state = RemoteSessionState::Reconnecting {
+                        target_id: target.clone(),
+                        attempt: 1,
+                        max_attempts: 5,
+                        countdown: 3.0,
+                    };
+                    self.status_text = format!("⚠️ Conexión perdida con [{}]: {}. Reconectando automáticamente... (Intento 1 de 5)", target, reason);
+                    let _ = self.tx_to_net.send(UiToNet::Connect {
+                        target_id: target,
+                        password: self.saved_password.clone(),
+                    });
+                }
                 NetToUi::SessionRejected(reason) => {
                     self.status_text = format!("❌ Conexión rechazada: {}", reason);
                     self.active_peer_id = None;
                     self.remote_file_entries.clear();
                     self.selected_remote_file = None;
+                    let target = self.saved_target_id.clone();
+                    if !target.is_empty() {
+                        self.remote_session_state = RemoteSessionState::ConnectionLost {
+                            target_id: target,
+                            reason,
+                        };
+                    } else {
+                        self.remote_session_state = RemoteSessionState::Idle;
+                    }
                 }
                 NetToUi::SessionError(err) => {
-                    self.status_text = format!("⚠️ Error: {}", err);
+                    match &mut self.remote_session_state {
+                        RemoteSessionState::Reconnecting { target_id, attempt, max_attempts, .. } => {
+                            self.status_text = format!("⚠️ Intento {} de {} con [{}] fallido: {}. Reintentando...", attempt, max_attempts, target_id, err);
+                        }
+                        RemoteSessionState::Connected { target_id } => {
+                            let tid = target_id.clone();
+                            self.active_peer_id = None;
+                            self.remote_session_state = RemoteSessionState::Reconnecting {
+                                target_id: tid.clone(),
+                                attempt: 1,
+                                max_attempts: 5,
+                                countdown: 3.0,
+                            };
+                            self.status_text = format!("⚠️ Conexión perdida con [{}]: {}. Reconectando...", tid, err);
+                            let _ = self.tx_to_net.send(UiToNet::Connect {
+                                target_id: tid,
+                                password: self.saved_password.clone(),
+                            });
+                        }
+                        _ => {
+                            self.status_text = format!("⚠️ Error: {}", err);
+                        }
+                    }
                 }
                 NetToUi::ChatReceived { from_id, text } => {
                     self.chat_history.push((from_id, text));
@@ -446,7 +557,112 @@ impl eframe::App for DashboardApp {
 
 impl DashboardApp {
     fn show_main_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(15.0);
+        ui.add_space(10.0);
+
+        // Banner de estado de reconexión y reestablecimiento
+        let session_state_copy = self.remote_session_state.clone();
+        match session_state_copy {
+            RemoteSessionState::Reconnecting { target_id, attempt, max_attempts, countdown } => {
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(30, 27, 75))
+                    .stroke(Stroke::new(1.5_f32, Color32::from_rgb(250, 204, 21)))
+                    .rounding(8.0)
+                    .inner_margin(12.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("⚠️").size(22.0));
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new(format!("CONEXIÓN PERDIDA CON [{}]", target_id))
+                                        .strong()
+                                        .size(14.0)
+                                        .color(Color32::from_rgb(250, 204, 21)),
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Intentando autoconectarse primero... (Intento {} de {} • Próximo reintento en {:.0}s)",
+                                        attempt, max_attempts, countdown.max(0.0)
+                                    ))
+                                    .color(Color32::from_rgb(226, 232, 240)),
+                                );
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(RichText::new("❌ Cancelar").strong()).clicked() {
+                                    self.remote_session_state = RemoteSessionState::ConnectionLost {
+                                        target_id: target_id.clone(),
+                                        reason: "Reconexión automática cancelada por el usuario.".to_string(),
+                                    };
+                                }
+                                if ui.add(
+                                    egui::Button::new(RichText::new("🔄 Reintentar Ahora").strong().color(Color32::WHITE))
+                                        .fill(Color32::from_rgb(14, 116, 144))
+                                ).clicked() {
+                                    let _ = self.tx_to_net.send(UiToNet::Connect {
+                                        target_id: target_id.clone(),
+                                        password: self.saved_password.clone(),
+                                    });
+                                }
+                            });
+                        });
+                    });
+                ui.add_space(10.0);
+            }
+            RemoteSessionState::ConnectionLost { target_id, reason } => {
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(69, 10, 10))
+                    .stroke(Stroke::new(1.5_f32, Color32::from_rgb(239, 68, 68)))
+                    .rounding(8.0)
+                    .inner_margin(12.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("🔴").size(22.0));
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new(format!("CONEXIÓN PERDIDA CON [{}]", target_id))
+                                        .strong()
+                                        .size(14.0)
+                                        .color(Color32::from_rgb(248, 113, 113)),
+                                );
+                                ui.label(
+                                    RichText::new(format!("Motivo: {}", reason))
+                                        .color(Color32::from_rgb(226, 232, 240)),
+                                );
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("Descartar").clicked() {
+                                    self.remote_session_state = RemoteSessionState::Idle;
+                                }
+                                if ui.add(
+                                    egui::Button::new(
+                                        RichText::new("🔄 REESTABLECER CONEXIÓN")
+                                            .strong()
+                                            .size(13.0)
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(16, 185, 129))
+                                ).clicked() {
+                                    self.target_id_input = target_id.clone();
+                                    if let Some(ref pass) = self.saved_password {
+                                        self.password_input = pass.clone();
+                                    }
+                                    self.remote_session_state = RemoteSessionState::Reconnecting {
+                                        target_id: target_id.clone(),
+                                        attempt: 1,
+                                        max_attempts: 5,
+                                        countdown: 3.0,
+                                    };
+                                    let _ = self.tx_to_net.send(UiToNet::Connect {
+                                        target_id: target_id.clone(),
+                                        password: self.saved_password.clone(),
+                                    });
+                                }
+                            });
+                        });
+                    });
+                ui.add_space(10.0);
+            }
+            _ => {}
+        }
 
         ui.columns(2, |cols| {
             cols[0].group(|ui| {
@@ -517,11 +733,28 @@ impl DashboardApp {
                         } else {
                             Some(self.password_input.clone())
                         };
+                        self.saved_target_id = target.clone();
+                        self.saved_password = pass.clone();
+                        self.remote_session_state = RemoteSessionState::Connecting { target_id: target.clone() };
                         let _ = self.tx_to_net.send(UiToNet::Connect {
                             target_id: target,
                             password: pass,
                         });
                     }
+                }
+
+                let active_peer = self.active_peer_id.clone();
+                if let Some(peer) = active_peer {
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("🟢 Sesión activa con [{}]", peer)).strong().color(Color32::from_rgb(52, 211, 153)));
+                        if ui.button(RichText::new("Cerrar Sesión").color(Color32::from_rgb(248, 113, 113))).clicked() {
+                            let _ = self.tx_to_net.send(UiToNet::DisconnectActive);
+                            self.active_peer_id = None;
+                            self.remote_session_state = RemoteSessionState::Idle;
+                            self.status_text = "Sesión finalizada por el usuario.".to_string();
+                        }
+                    });
                 }
             });
         });
@@ -760,6 +993,9 @@ impl DashboardApp {
                     } else {
                         self.password_input.clear();
                     }
+                    self.saved_target_id = id.clone();
+                    self.saved_password = pass.clone();
+                    self.remote_session_state = RemoteSessionState::Connecting { target_id: id.clone() };
                     let _ = self.tx_to_net.send(UiToNet::Connect {
                         target_id: id,
                         password: pass,

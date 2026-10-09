@@ -186,6 +186,7 @@ fn main() -> Result<(), eframe::Error> {
     let active_permissions: Arc<RwLock<SessionPermissions>> = Arc::new(RwLock::new(SessionPermissions::default()));
     let shared_config: Arc<RwLock<AppConfig>> = Arc::new(RwLock::new(config.clone()));
     let active_streaming_quality: Arc<RwLock<u8>> = Arc::new(RwLock::new(88)); // 88% HD Nativa cristalina por defecto
+    let last_frame_received: Arc<RwLock<Option<std::time::Instant>>> = Arc::new(RwLock::new(None));
 
     // Gestor de transferencia de archivos
     let file_manager: Arc<Mutex<FileTransferManager>> = Arc::new(Mutex::new(FileTransferManager::new()));
@@ -257,6 +258,36 @@ fn main() -> Result<(), eframe::Error> {
                 }
             });
 
+            // Watchdog para detectar pérdida de señal o desconexión abrupta del host remoto
+            let active_target_watchdog = active_target_id.clone();
+            let last_frame_watchdog = last_frame_received.clone();
+            let tx_ui_watchdog = tx_to_ui.clone();
+            tokio::spawn(async move {
+                let mut reported_lost = false;
+                loop {
+                    sleep(Duration::from_millis(1000)).await;
+                    if let Some(target) = active_target_watchdog.read().await.clone() {
+                        let is_silent = if let Some(last_time) = *last_frame_watchdog.read().await {
+                            last_time.elapsed() > Duration::from_secs(5)
+                        } else {
+                            false
+                        };
+                        if is_silent && !reported_lost {
+                            reported_lost = true;
+                            log::warn!("⚠️ [WATCHDOG] Conexión perdida con [{}]: sin fotogramas por 5s.", target);
+                            let _ = tx_ui_watchdog.send(NetToUi::SessionDisconnected {
+                                target_id: target,
+                                reason: "Se ha perdido la señal con el equipo remoto (tiempo de espera agotado).".to_string(),
+                            });
+                        } else if !is_silent {
+                            reported_lost = false;
+                        }
+                    } else {
+                        reported_lost = false;
+                    }
+                }
+            });
+
             // Procesar peticiones emitidas desde la GUI de WolfDesk
             let outbound_for_ui = outbound_tx.clone();
             let target_for_ui = active_target_id.clone();
@@ -283,6 +314,15 @@ fn main() -> Result<(), eframe::Error> {
                                 password_hash,
                                 auth_signature: None,
                             });
+                        }
+
+                        UiToNet::DisconnectActive => {
+                            if let Some(target) = target_for_ui.write().await.take() {
+                                let _ = outbound_for_ui.send(SignalMessage::Disconnect {
+                                    target_id: target,
+                                    reason: "El usuario ha cerrado la sesión de WolfDesk.".to_string(),
+                                });
+                            }
                         }
 
                         UiToNet::AcceptIncoming { from_id, permissions } => {
@@ -465,16 +505,21 @@ fn main() -> Result<(), eframe::Error> {
 
                     SignalMessage::ConnectAccept { from_id, .. } => {
                         *active_target_id.write().await = Some(from_id.clone());
+                        *last_frame_received.write().await = Some(std::time::Instant::now());
                         let _ = tx_ui_notify.send(NetToUi::SessionAccepted(from_id.clone()));
 
-                        let (f_tx, f_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-                        *viewer_tx_clone.lock().unwrap() = Some(f_tx);
+                        if !client_core::viewer::VIEWER_IS_OPEN.load(std::sync::atomic::Ordering::SeqCst) {
+                            let (f_tx, f_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+                            *viewer_tx_clone.lock().unwrap() = Some(f_tx);
 
-                        let title = format!("🐺 WolfDesk - Sesión Activa con [{}]", from_id);
-                        let ctrl_tx = viewer_ctrl_tx_clone.clone();
-                        std::thread::spawn(move || {
-                            start_viewer_window(&title, f_rx, ctrl_tx);
-                        });
+                            let title = format!("🐺 WolfDesk - Sesión Activa con [{}]", from_id);
+                            let ctrl_tx = viewer_ctrl_tx_clone.clone();
+                            std::thread::spawn(move || {
+                                start_viewer_window(&title, f_rx, ctrl_tx);
+                            });
+                        } else {
+                            log::info!("🐺 [RECONECTADO] El visor ya está abierto para [{}]. Reanudando fotogramas...", from_id);
+                        }
                     }
 
                     SignalMessage::ConnectReject { reason, .. } => {
@@ -530,12 +575,20 @@ fn main() -> Result<(), eframe::Error> {
                     }
 
                     SignalMessage::VideoFrame { jpeg_base64, .. } => {
+                        *last_frame_received.write().await = Some(std::time::Instant::now());
                         use base64::Engine;
                         if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(jpeg_base64) {
                             if let Some(ref s) = *viewer_tx_clone.lock().unwrap() {
                                 let _ = s.send(bytes);
                             }
                         }
+                    }
+
+                    SignalMessage::Disconnect { target_id, reason } => {
+                        log::warn!("Sesión desconectada por [{}]: {}", target_id, reason);
+                        *active_target_id.write().await = None;
+                        *last_frame_received.write().await = None;
+                        let _ = tx_ui_notify.send(NetToUi::SessionDisconnected { target_id, reason });
                     }
 
                     SignalMessage::Control { event, .. } => {
