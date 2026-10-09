@@ -74,4 +74,14 @@ COMMIT_HASH=$(git rev-parse --short HEAD)
 echo -e "${GREEN}====================================================${NC}"
 echo -e "${GREEN} [✓] ¡WolfDesk actualizado exitosamente a [$COMMIT_HASH]! ${NC}"
 echo -e "${GREEN}====================================================${NC}"
-echo -e "Puedes reiniciar la aplicación o el servicio para ejecutar la nueva versión."
+echo -e "Cerrando instancias anteriores para aplicar los cambios..."
+pkill -9 -f /opt/wolfdesk/wolfdesk 2>/dev/null || true
+pkill -9 -f target/release/wolfdesk 2>/dev/null || true
+sleep 1
+
+if [ -f "/etc/systemd/system/wolfdesk.service" ] && systemctl is-active --quiet wolfdesk; then
+    echo -e "${BLUE}[*] Reiniciando servicio wolfdesk.service...${NC}"
+    systemctl restart wolfdesk
+fi
+
+echo -e "${GREEN}[✓] Todo listo. Puedes iniciar WolfDesk ahora con:${NC} ${YELLOW}wolfdesk${NC} o ${YELLOW}./target/release/wolfdesk${NC}"
