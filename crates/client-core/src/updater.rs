@@ -286,7 +286,11 @@ where
         let target_exe = repo_dir.join("target/release/wolfdesk.exe");
         if target_exe.exists() {
             let pid = std::process::id();
-            let old_exe = repo_dir.join(format!("target/release/wolfdesk.exe.old_{}", pid));
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let old_exe = repo_dir.join(format!("target/release/wolfdesk.exe.old_{}_{}", pid, ts));
             let _ = std::fs::remove_file(&old_exe);
             let _ = std::fs::rename(&target_exe, &old_exe);
         }
@@ -338,10 +342,14 @@ where
     #[cfg(windows)]
     {
         let pid = std::process::id();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         if let Ok(prog_files) = std::env::var("ProgramFiles") {
             let dest = PathBuf::from(prog_files).join("WolfDesk").join(exe_name);
             if dest.exists() {
-                let old_dest = dest.with_file_name(format!("wolfdesk.exe.old_{}", pid));
+                let old_dest = dest.with_file_name(format!("wolfdesk.exe.old_{}_{}", pid, ts));
                 let _ = std::fs::remove_file(&old_dest);
                 let _ = std::fs::rename(&dest, &old_dest);
                 let _ = std::fs::copy(&new_binary, &dest);
@@ -350,7 +358,7 @@ where
         if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
             let dest = PathBuf::from(local_appdata).join("Programs/WolfDesk").join(exe_name);
             if dest.exists() {
-                let old_dest = dest.with_file_name(format!("wolfdesk.exe.old_{}", pid));
+                let old_dest = dest.with_file_name(format!("wolfdesk.exe.old_{}_{}", pid, ts));
                 let _ = std::fs::remove_file(&old_dest);
                 let _ = std::fs::rename(&dest, &old_dest);
                 let _ = std::fs::copy(&new_binary, &dest);

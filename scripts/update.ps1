@@ -14,9 +14,9 @@ if (Test-Path ".git") {
     # Si wolfdesk.exe está en ejecución, Windows bloquea sobrescribirlo directamente. Renombramos a .old para permitir la compilación limpia.
     $TargetExe = "target\release\wolfdesk.exe"
     if (Test-Path $TargetExe) {
-        $OldExe = "target\release\wolfdesk.exe.old_$PID"
-        if (Test-Path $OldExe) { Remove-Item -Force $OldExe -ErrorAction SilentlyContinue }
-        Rename-Item -Path $TargetExe -NewName "wolfdesk.exe.old_$PID" -Force -ErrorAction SilentlyContinue
+        $Ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $OldExe = "target\release\wolfdesk.exe.old_${PID}_${Ts}"
+        Rename-Item -Path $TargetExe -NewName "wolfdesk.exe.old_${PID}_${Ts}" -Force -ErrorAction SilentlyContinue
     }
 
     Write-Host "[*] Compilando binarios con Cargo (Release)..." -ForegroundColor Cyan
