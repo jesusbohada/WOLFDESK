@@ -13,7 +13,7 @@ pub mod updater;
 pub mod viewer;
 
 pub use capture::{ScreenCapturer, ScreenFrame};
-pub use config::AppConfig;
+pub use config::{AppConfig, Contact};
 pub use dashboard::DashboardApp;
 pub use file_transfer::FileTransferManager;
 pub use identity_store::load_or_create_identity;

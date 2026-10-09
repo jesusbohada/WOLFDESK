@@ -6,6 +6,7 @@ use std::sync::mpsc::Receiver;
 #[derive(PartialEq)]
 pub enum ActiveTab {
     Main,
+    AddressBook,
     Chat,
     Files,
     Settings,
@@ -105,6 +106,15 @@ pub struct DashboardApp {
     // Gestor de Actualizaciones
     pub update_status: crate::updater::UpdateStatus,
 
+    // Libreta de direcciones / Contactos
+    pub contact_search_query: String,
+    pub contact_alias_input: String,
+    pub contact_id_input: String,
+    pub contact_notes_input: String,
+    pub editing_contact_id: Option<String>,
+    pub show_contact_form: bool,
+    pub contact_feedback: Option<String>,
+
     // Sistema de instalación permanente y terminal
     pub is_installed: bool,
     pub show_install_dialog: bool,
@@ -153,6 +163,13 @@ impl DashboardApp {
             admin_pin_input: String::new(),
             admin_unlock_error: None,
             update_status: crate::updater::UpdateStatus::NotChecked,
+            contact_search_query: String::new(),
+            contact_alias_input: String::new(),
+            contact_id_input: String::new(),
+            contact_notes_input: String::new(),
+            editing_contact_id: None,
+            show_contact_form: false,
+            contact_feedback: None,
             is_installed,
             show_install_dialog: false,
             install_feedback: None,
@@ -371,6 +388,9 @@ impl eframe::App for DashboardApp {
                 if ui.selectable_label(self.active_tab == ActiveTab::Main, "🖥️ Conexión").clicked() {
                     self.active_tab = ActiveTab::Main;
                 }
+                if ui.selectable_label(self.active_tab == ActiveTab::AddressBook, "📇 Libreta").clicked() {
+                    self.active_tab = ActiveTab::AddressBook;
+                }
                 if ui.selectable_label(self.active_tab == ActiveTab::Chat, "💬 Chat").clicked() {
                     self.active_tab = ActiveTab::Chat;
                 }
@@ -410,6 +430,7 @@ impl eframe::App for DashboardApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.active_tab {
                 ActiveTab::Main => self.show_main_tab(ui),
+                ActiveTab::AddressBook => self.show_address_book_tab(ui),
                 ActiveTab::Chat => self.show_chat_tab(ui),
                 ActiveTab::Files => self.show_files_tab(ui),
                 ActiveTab::Settings => self.show_settings_tab(ui),
@@ -463,6 +484,16 @@ impl DashboardApp {
                 ui.horizontal(|ui| {
                     ui.label("ID Remoto:");
                     ui.text_edit_singleline(&mut self.target_id_input);
+                    if !self.target_id_input.trim().is_empty() {
+                        if ui.button("⭐ Guardar").on_hover_text("Guardar este ID en tu libreta de contactos").clicked() {
+                            self.contact_id_input = self.target_id_input.trim().to_string();
+                            self.contact_alias_input = String::new();
+                            self.contact_notes_input = String::new();
+                            self.editing_contact_id = None;
+                            self.show_contact_form = true;
+                            self.active_tab = ActiveTab::AddressBook;
+                        }
+                    }
                 });
 
                 ui.add_space(5.0);
@@ -492,7 +523,30 @@ impl DashboardApp {
             });
         });
 
-        ui.add_space(20.0);
+        ui.add_space(15.0);
+
+        if !self.config.contacts.is_empty() {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("📇 Mis Contactos Guardados").strong().color(Color32::from_rgb(0, 229, 255)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Ver Libreta Completa ➡️").clicked() {
+                            self.active_tab = ActiveTab::AddressBook;
+                        }
+                    });
+                });
+                ui.horizontal_wrapped(|ui| {
+                    for contact in self.config.contacts.clone() {
+                        let label = format!("🏷️ {} ({})", contact.alias, contact.id);
+                        if ui.button(RichText::new(label).strong()).on_hover_text(format!("Cargar ID {} de {}", contact.id, contact.alias)).clicked() {
+                            self.target_id_input = contact.id.clone();
+                        }
+                    }
+                });
+            });
+            ui.add_space(10.0);
+        }
+
         ui.group(|ui| {
             ui.label(RichText::new("Puestos WolfDesk recientes").strong());
             if self.config.recent_ids.is_empty() {
@@ -505,6 +559,200 @@ impl DashboardApp {
                         }
                     }
                 });
+            }
+        });
+    }
+
+    fn show_address_book_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("📇 Libreta de Direcciones y Contactos").strong().size(16.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let btn_label = if self.show_contact_form { "❌ Cerrar Formulario" } else { "➕ Nuevo Contacto" };
+                    if ui.button(RichText::new(btn_label).strong().color(Color32::WHITE)).clicked() {
+                        self.show_contact_form = !self.show_contact_form;
+                        if self.show_contact_form && self.editing_contact_id.is_none() {
+                            self.contact_alias_input.clear();
+                            self.contact_id_input.clear();
+                            self.contact_notes_input.clear();
+                        }
+                    }
+                });
+            });
+            ui.label("Guarda diferentes IDs con un nombre o alias para acceder a ellos al instante.");
+            ui.separator();
+
+            if let Some(ref msg) = self.contact_feedback {
+                ui.label(RichText::new(msg).color(Color32::from_rgb(52, 211, 153)).strong());
+                ui.add_space(5.0);
+            }
+
+            // Formulario para Agregar / Editar contacto
+            if self.show_contact_form {
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(17, 24, 39))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0, 229, 255)))
+                    .rounding(6.0)
+                    .inner_margin(12.0)
+                    .show(ui, |ui| {
+                        let title = if self.editing_contact_id.is_some() { "✏️ Editar Contacto" } else { "➕ Agregar Nuevo Contacto a la Libreta" };
+                        ui.label(RichText::new(title).strong().size(14.0).color(Color32::from_rgb(0, 229, 255)));
+                        ui.add_space(8.0);
+
+                        egui::Grid::new("contact_form_grid").num_columns(2).spacing([10.0, 10.0]).show(ui, |ui| {
+                            ui.label("Nombre / Alias:");
+                            ui.add(egui::TextEdit::singleline(&mut self.contact_alias_input).hint_text("ej. Oficina Central, PC Casa, Servidor"));
+                            ui.end_row();
+
+                            ui.label("ID WolfDesk:");
+                            ui.add(egui::TextEdit::singleline(&mut self.contact_id_input).hint_text("ej. 770 130 282"));
+                            ui.end_row();
+
+                            ui.label("Notas (Opcional):");
+                            ui.add(egui::TextEdit::singleline(&mut self.contact_notes_input).hint_text("ej. Contraseña de acceso desatendido, piso, etc."));
+                            ui.end_row();
+                        });
+
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            let can_save = !self.contact_id_input.trim().is_empty();
+                            ui.add_enabled_ui(can_save, |ui| {
+                                if ui.add(egui::Button::new(RichText::new("💾 Guardar Contacto").strong().color(Color32::WHITE)).fill(Color32::from_rgb(16, 185, 129))).clicked() {
+                                    let id = self.contact_id_input.trim().to_string();
+                                    let alias = self.contact_alias_input.trim().to_string();
+                                    let notes = self.contact_notes_input.trim().to_string();
+                                    self.config.save_contact(&id, &alias, &notes);
+                                    let _ = self.tx_to_net.send(UiToNet::UpdateConfig(self.config.clone()));
+                                    self.contact_feedback = Some(format!("Contacto guardado: {}", if alias.is_empty() { &id } else { &alias }));
+                                    self.show_contact_form = false;
+                                    self.editing_contact_id = None;
+                                    self.contact_alias_input.clear();
+                                    self.contact_id_input.clear();
+                                    self.contact_notes_input.clear();
+                                }
+                            });
+
+                            if ui.button("Cancelar").clicked() {
+                                self.show_contact_form = false;
+                                self.editing_contact_id = None;
+                            }
+                        });
+                    });
+                ui.add_space(10.0);
+            }
+
+            // Barra de búsqueda / filtrado
+            ui.horizontal(|ui| {
+                ui.label("🔍 Buscar:");
+                ui.add(egui::TextEdit::singleline(&mut self.contact_search_query).hint_text("Filtrar por nombre o ID..."));
+                if !self.contact_search_query.is_empty() && ui.button("✖").clicked() {
+                    self.contact_search_query.clear();
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(format!("Total: {} contactos", self.config.contacts.len())).weak());
+                });
+            });
+
+            ui.add_space(10.0);
+
+            // Lista de contactos
+            let filter = self.contact_search_query.to_lowercase();
+            let matching_contacts: Vec<crate::config::Contact> = self.config.contacts
+                .iter()
+                .filter(|c| {
+                    if filter.is_empty() {
+                        true
+                    } else {
+                        c.alias.to_lowercase().contains(&filter) || c.id.to_lowercase().contains(&filter) || c.notes.to_lowercase().contains(&filter)
+                    }
+                })
+                .cloned()
+                .collect();
+
+            if matching_contacts.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(RichText::new("📇").size(32.0));
+                    if self.config.contacts.is_empty() {
+                        ui.label(RichText::new("No tienes contactos guardados en tu libreta.").strong());
+                        ui.label("Haz clic en '➕ Nuevo Contacto' para registrar tu primer equipo remoto.");
+                    } else {
+                        ui.label(RichText::new("No se encontraron contactos que coincidan con la búsqueda.").strong());
+                    }
+                    ui.add_space(20.0);
+                });
+            } else {
+                let mut contact_to_connect = None;
+                let mut contact_to_delete = None;
+                let mut contact_to_edit = None;
+
+                egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                    for contact in matching_contacts {
+                        egui::Frame::none()
+                            .fill(Color32::from_rgb(15, 23, 42))
+                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(30, 41, 59)))
+                            .rounding(6.0)
+                            .inner_margin(10.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("🖥️").size(18.0));
+                                    ui.vertical(|ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new(&contact.alias).strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                                            ui.label(RichText::new(format!("[ID: {}]", contact.id)).monospace().color(Color32::WHITE).strong());
+                                        });
+                                        if !contact.notes.is_empty() {
+                                            ui.label(RichText::new(format!("📝 {}", contact.notes)).italics().size(12.0).weak());
+                                        }
+                                    });
+
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.add(egui::Button::new(RichText::new("🗑️").color(Color32::from_rgb(239, 68, 68)))).on_hover_text("Eliminar contacto").clicked() {
+                                            contact_to_delete = Some(contact.id.clone());
+                                        }
+
+                                        if ui.button("✏️ Editar").clicked() {
+                                            contact_to_edit = Some(contact.clone());
+                                        }
+
+                                        if ui.button("📋 Copiar").on_hover_text("Copiar ID al portapapeles").clicked() {
+                                            ui.output_mut(|o| o.copied_text = contact.id.clone());
+                                            self.contact_feedback = Some(format!("ID de '{}' copiado al portapapeles.", contact.alias));
+                                        }
+
+                                        if ui.add(egui::Button::new(RichText::new("🚀 Conectar").strong().color(Color32::WHITE)).fill(Color32::from_rgb(14, 116, 144))).clicked() {
+                                            contact_to_connect = Some(contact.id.clone());
+                                        }
+                                    });
+                                });
+                            });
+                        ui.add_space(6.0);
+                    }
+                });
+
+                if let Some(id) = contact_to_connect {
+                    self.target_id_input = id.clone();
+                    let _ = self.tx_to_net.send(UiToNet::Connect {
+                        target_id: id,
+                        password: None,
+                    });
+                    self.active_tab = ActiveTab::Main;
+                }
+
+                if let Some(id) = contact_to_delete {
+                    self.config.remove_contact(&id);
+                    let _ = self.tx_to_net.send(UiToNet::UpdateConfig(self.config.clone()));
+                    self.contact_feedback = Some("Contacto eliminado de la libreta.".to_string());
+                }
+
+                if let Some(c) = contact_to_edit {
+                    self.contact_id_input = c.id.clone();
+                    self.contact_alias_input = c.alias.clone();
+                    self.contact_notes_input = c.notes.clone();
+                    self.editing_contact_id = Some(c.id);
+                    self.show_contact_form = true;
+                }
             }
         });
     }
