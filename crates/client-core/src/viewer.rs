@@ -325,7 +325,7 @@ pub fn start_viewer_window(
     println!(" • Tecla Windows y eliminación continua de teclado habilitadas");
     println!("============================================================");
 
-    while window.is_open() && !window.is_key_down(Key::Escape) {
+    while window.is_open() {
         // 1. Hotkeys de Calidad (F1, F2, F3, F4)
         if window.is_key_down(Key::F1) {
             quality_tier = 0;
@@ -684,7 +684,7 @@ pub fn start_viewer_window(
         // 11. Eventos de teclado con repetición continua (elimina continuamente al mantener pulsado Backspace)
         let pressed_keys = window.get_keys_pressed(KeyRepeat::Yes);
         for key in pressed_keys {
-            if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9 | Key::Escape) {
+            if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
                 continue;
             }
             if let Some(vk_code) = minifb_key_to_vk(key) {
@@ -697,7 +697,7 @@ pub fn start_viewer_window(
 
         let released_keys = window.get_keys_released();
         for key in released_keys {
-            if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9 | Key::Escape) {
+            if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
                 continue;
             }
             if let Some(vk_code) = minifb_key_to_vk(key) {
