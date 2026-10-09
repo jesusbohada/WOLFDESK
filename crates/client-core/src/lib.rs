@@ -28,7 +28,7 @@ pub use viewer::start_viewer_window;
 
 /// Reinicia completamente la aplicación / servicio WolfDesk después de una breve pausa
 pub fn restart_application() {
-    log::info!("🐺 [RESTART] Reiniciando la aplicación / servicio WolfDesk en 2 segundos...");
+    log::info!("🐺 [RESTART] Reiniciando la aplicación / servicio WolfDesk de forma limpia...");
 
     #[cfg(target_os = "linux")]
     {
@@ -37,15 +37,15 @@ pub fn restart_application() {
         let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
         let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "/home/caja/.Xauthority".to_string());
 
-        // 1. Si existe el servicio systemd, solicitar reinicio a systemd
+        // 1. Si existe el servicio systemd, solicitar reinicio formal a systemd
         if std::path::Path::new("/etc/systemd/system/wolfdesk.service").exists() {
             let _ = std::process::Command::new("systemctl")
                 .args(["restart", "wolfdesk"])
                 .spawn();
         } else {
-            // 2. Si no es servicio systemd, lanzar proceso en segundo plano que espere 2s y vuelva a abrir WolfDesk
+            // 2. Si no es servicio systemd, esperar salida, limpiar procesos y relanzar
             let restart_cmd = format!(
-                "sleep 2 && DISPLAY={} XAUTHORITY={} nohup '{}' >/dev/null 2>&1 &",
+                "sleep 1 && killall -9 wolfdesk 2>/dev/null; sleep 0.5 && DISPLAY={} XAUTHORITY={} nohup '{}' >/dev/null 2>&1 &",
                 display, xauthority, exe_str
             );
             let _ = std::process::Command::new("sh")
@@ -65,7 +65,21 @@ pub fn restart_application() {
                 }
             }
             let exe_str = exe.to_string_lossy().to_string();
-            let cmd = format!("Start-Sleep -Seconds 2; Start-Process -FilePath '{}'", exe_str);
+            let parent_dir = exe.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+
+            // Esperar 1s a que el proceso actual finalice, limpiar instancias colgadas y relanzar con su directorio activo
+            let cmd = if !parent_dir.is_empty() {
+                format!(
+                    "Start-Sleep -Seconds 1; Stop-Process -Name wolfdesk -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Start-Process -FilePath '{}' -WorkingDirectory '{}'",
+                    exe_str, parent_dir
+                )
+            } else {
+                format!(
+                    "Start-Sleep -Seconds 1; Stop-Process -Name wolfdesk -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Start-Process -FilePath '{}'",
+                    exe_str
+                )
+            };
+
             let _ = std::process::Command::new("powershell")
                 .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &cmd])
                 .spawn();

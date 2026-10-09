@@ -148,6 +148,8 @@ pub struct DashboardApp {
     pub is_installed: bool,
     pub show_install_dialog: bool,
     pub install_feedback: Option<String>,
+    pub show_restart_confirm_dialog: bool,
+    pub is_restarting: bool,
     pub terminal_command: String,
 
     // Reconexión automática y reestablecimiento de sesión
@@ -221,6 +223,8 @@ impl DashboardApp {
             is_installed,
             show_install_dialog: false,
             install_feedback: None,
+            show_restart_confirm_dialog: false,
+            is_restarting: false,
             terminal_command: String::new(),
             saved_target_id: String::new(),
             saved_password: None,
@@ -1730,6 +1734,61 @@ impl DashboardApp {
                     }
                 }
             });
+        });
+
+        ui.add_space(15.0);
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("🔄 Control y Reinicio del Servicio").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new("🟢 Servicio Activo").color(Color32::from_rgb(16, 185, 129)).strong());
+                });
+            });
+            ui.add_space(4.0);
+            ui.label("Reinicia completamente el servicio en segundo plano, túneles WebSocket, motor de captura y sockets de red de WolfDesk. Útil si se experimenta degradación de red o tras aplicar cambios del sistema.");
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                let btn = egui::Button::new(RichText::new("🔄 Reiniciar Servicio de la Aplicación").color(Color32::WHITE).strong())
+                    .fill(Color32::from_rgb(14, 116, 144))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(56, 189, 248)));
+
+                if ui.add(btn).on_hover_text("Detiene y vuelve a levantar de forma limpia e inmediata el servicio y proceso de WolfDesk").clicked() {
+                    self.show_restart_confirm_dialog = true;
+                }
+
+                if self.is_restarting {
+                    ui.spinner();
+                    ui.label(RichText::new("Reiniciando servicio...").color(Color32::from_rgb(250, 204, 21)).strong());
+                }
+            });
+
+            if self.show_restart_confirm_dialog {
+                ui.add_space(8.0);
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(24, 30, 42))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(250, 204, 21)))
+                    .rounding(4.0)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("⚠️ ¿Deseas reiniciar completamente el servicio de WolfDesk?").strong().color(Color32::from_rgb(250, 204, 21)));
+                        ui.label("La aplicación se cerrará y volverá a levantarse automáticamente en 1 segundo con todos los subsistemas restablecidos.");
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let confirm_btn = egui::Button::new(RichText::new("✅ Sí, Reiniciar Ahora").color(Color32::WHITE).strong())
+                                .fill(Color32::from_rgb(16, 185, 129));
+                            if ui.add(confirm_btn).clicked() {
+                                self.is_restarting = true;
+                                self.show_restart_confirm_dialog = false;
+                                crate::restart_application();
+                            }
+
+                            if ui.button("Cancelar").clicked() {
+                                self.show_restart_confirm_dialog = false;
+                            }
+                        });
+                    });
+            }
         });
     }
 
