@@ -1,7 +1,7 @@
 @echo off
 title WolfDesk Pro - Actualizador Oficial
 echo ============================================================
-echo   🐺 Actualizando WolfDesk a la ultima version...
+echo   [WolfDesk] Actualizando a la ultima version...
 echo ============================================================
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\update.ps1"
 if %errorlevel% equ 0 (
