@@ -56,7 +56,14 @@ pub fn restart_application() {
 
     #[cfg(windows)]
     {
-        if let Ok(exe) = std::env::current_exe() {
+        if let Ok(mut exe) = std::env::current_exe() {
+            // Si el ejecutable actual fue renombrado durante la actualización a *.old_*,
+            // debemos restaurar el nombre original wolfdesk.exe para no relanzar el binario antiguo
+            if let Some(file_name) = exe.file_name().and_then(|n| n.to_str()) {
+                if file_name.contains(".old") {
+                    exe.set_file_name("wolfdesk.exe");
+                }
+            }
             let exe_str = exe.to_string_lossy().to_string();
             let cmd = format!("Start-Sleep -Seconds 2; Start-Process -FilePath '{}'", exe_str);
             let _ = std::process::Command::new("powershell")

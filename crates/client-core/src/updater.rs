@@ -7,7 +7,8 @@ pub fn get_local_version() -> &'static str {
 }
 
 pub fn get_build_git_hash() -> &'static str {
-    option_env!("WOLFDESK_BUILD_GIT_HASH").unwrap_or("10eb531")
+    const COMPILED_HASH: &str = include_str!(concat!(env!("OUT_DIR"), "/build_git_hash.txt"));
+    COMPILED_HASH.trim()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -351,6 +352,10 @@ where
 
     #[cfg(target_os = "linux")]
     {
+        let root_bin = repo_dir.join(exe_name);
+        let _ = std::fs::remove_file(&root_bin);
+        let _ = std::fs::copy(&new_binary, &root_bin);
+
         if Path::new("/opt/wolfdesk").exists() {
             let dest = Path::new("/opt/wolfdesk/wolfdesk");
             let _ = std::fs::remove_file(dest); // Desvincular inodo previo para evitar 'Text file busy'
@@ -370,19 +375,44 @@ where
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+
+        // 1. Actualizar wolfdesk.exe en la raíz del repositorio
+        let root_exe = repo_dir.join(exe_name);
+        if root_exe.exists() {
+            let old_root = repo_dir.join(format!("{}.old_root_{}_{}", exe_name, pid, ts));
+            let _ = std::fs::remove_file(&old_root);
+            let _ = std::fs::rename(&root_exe, &old_root);
+            let _ = std::fs::copy(&new_binary, &root_exe);
+        } else {
+            let _ = std::fs::copy(&new_binary, &root_exe);
+        }
+
+        // 2. Actualizar el ejecutable actualmente en ejecución (si difiere de root_exe y new_binary)
+        if let Ok(cur_exe) = std::env::current_exe() {
+            if cur_exe.exists() && cur_exe != new_binary && cur_exe != root_exe {
+                let old_cur = cur_exe.with_file_name(format!("{}.old_cur_{}_{}", exe_name, pid, ts));
+                let _ = std::fs::remove_file(&old_cur);
+                let _ = std::fs::rename(&cur_exe, &old_cur);
+                let _ = std::fs::copy(&new_binary, &cur_exe);
+            }
+        }
+
+        // 3. Actualizar instalación formal en ProgramFiles
         if let Ok(prog_files) = std::env::var("ProgramFiles") {
             let dest = PathBuf::from(prog_files).join("WolfDesk").join(exe_name);
-            if dest.exists() {
-                let old_dest = dest.with_file_name(format!("wolfdesk.exe.old_{}_{}", pid, ts));
+            if dest.exists() && dest != new_binary {
+                let old_dest = dest.with_file_name(format!("{}.old_pf_{}_{}", exe_name, pid, ts));
                 let _ = std::fs::remove_file(&old_dest);
                 let _ = std::fs::rename(&dest, &old_dest);
                 let _ = std::fs::copy(&new_binary, &dest);
             }
         }
+
+        // 4. Actualizar instalación formal en LOCALAPPDATA
         if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
             let dest = PathBuf::from(local_appdata).join("Programs/WolfDesk").join(exe_name);
-            if dest.exists() {
-                let old_dest = dest.with_file_name(format!("wolfdesk.exe.old_{}_{}", pid, ts));
+            if dest.exists() && dest != new_binary {
+                let old_dest = dest.with_file_name(format!("{}.old_appdata_{}_{}", exe_name, pid, ts));
                 let _ = std::fs::remove_file(&old_dest);
                 let _ = std::fs::rename(&dest, &old_dest);
                 let _ = std::fs::copy(&new_binary, &dest);

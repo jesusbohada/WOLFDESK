@@ -91,6 +91,10 @@ fn main() {
         .unwrap_or_else(|| "10eb531".to_string());
     println!("cargo:rustc-env=WOLFDESK_BUILD_GIT_HASH={}", git_hash);
 
+    if let Ok(out_dir) = std::env::var("OUT_DIR") {
+        let _ = fs::write(Path::new(&out_dir).join("build_git_hash.txt"), &git_hash);
+    }
+
     // Instrucciones a Cargo para re-ejecutar build.rs si cambian referencias de Git
     println!("cargo:rerun-if-env-changed=WOLFDESK_BUILD_GIT_HASH");
     println!("cargo:rerun-if-changed=../../.git/HEAD");

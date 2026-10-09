@@ -22,6 +22,7 @@ identity.json
 # Application runtime outputs and downloads
 WolfDesk_Downloads/
 *.log
+crates/client-core/remote_desktop_config.json
 
 # Build distribution and packaging artifacts
 dist/

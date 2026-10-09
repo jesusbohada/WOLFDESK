@@ -37,6 +37,11 @@ if (Test-Path ".git") {
     Write-Host "[*] Compilando binarios con Cargo (Release)..." -ForegroundColor Cyan
     cargo build --release --bin wolfdesk
 
+    if (Test-Path "target\release\wolfdesk.exe") {
+        Write-Host "[*] Desplegando wolfdesk.exe en la raiz del proyecto..." -ForegroundColor Cyan
+        Copy-Item -Path "target\release\wolfdesk.exe" -Destination "wolfdesk.exe" -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host "[OK] WolfDesk actualizado exitosamente." -ForegroundColor Green
 } else {
     Write-Host "[ERROR] No se detecto un repositorio git en el directorio actual." -ForegroundColor Red
