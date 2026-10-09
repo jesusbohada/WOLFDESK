@@ -432,18 +432,47 @@ fn main() -> Result<(), eframe::Error> {
                             tokio::task::spawn_blocking(move || {
                                 match client_core::check_for_updates() {
                                     Ok(Some(remote_info)) => {
-                                        let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
-                                            client_core::UpdateStatus::UpdateAvailable {
-                                                current_commit: client_core::get_build_git_hash().to_string(),
-                                                latest_commit: remote_info.short_hash,
-                                                commit_message: remote_info.message,
-                                                date: remote_info.date,
-                                            },
-                                        ));
-                                        client_core::tray::wake_ui();
+                                        let current_hash = client_core::get_build_git_hash().trim().to_string();
+                                        let cur_clean = current_hash.to_lowercase();
+                                        let rem_clean = remote_info.commit_hash.trim().to_lowercase();
+                                        let short_clean = remote_info.short_hash.trim().to_lowercase();
+
+                                        if cur_clean == rem_clean
+                                            || cur_clean == short_clean
+                                            || rem_clean.starts_with(&cur_clean)
+                                            || cur_clean.starts_with(&short_clean)
+                                        {
+                                            let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                                                Ok(d) => {
+                                                    let secs = d.as_secs();
+                                                    let hours = (secs / 3600) % 24;
+                                                    let mins = (secs / 60) % 60;
+                                                    let s = secs % 60;
+                                                    format!("{:02}:{:02}:{:02} UTC", hours, mins, s)
+                                                }
+                                                Err(_) => "reciente".to_string(),
+                                            };
+                                            let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
+                                                client_core::UpdateStatus::UpToDate {
+                                                    commit: current_hash,
+                                                    checked_time: now,
+                                                },
+                                            ));
+                                            client_core::tray::wake_ui();
+                                        } else {
+                                            let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
+                                                client_core::UpdateStatus::UpdateAvailable {
+                                                    current_commit: current_hash,
+                                                    latest_commit: remote_info.short_hash,
+                                                    commit_message: remote_info.message,
+                                                    date: remote_info.date,
+                                                },
+                                            ));
+                                            client_core::tray::wake_ui();
+                                        }
                                     }
                                     Ok(None) => {
-                                        let current_hash = client_core::get_build_git_hash().to_string();
+                                        let current_hash = client_core::get_build_git_hash().trim().to_string();
                                         let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
                                             Ok(d) => {
                                                 let secs = d.as_secs();

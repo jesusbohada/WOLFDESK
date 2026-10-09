@@ -104,7 +104,8 @@ pub fn find_cargo_executable() -> PathBuf {
 
 /// Comprueba en el repositorio GitHub oficial si existe una versión más reciente
 pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
-    let local_hash = get_build_git_hash();
+    let local_hash = get_build_git_hash().trim();
+    let local_clean = local_hash.to_lowercase();
     let augmented_path = get_augmented_path();
 
     // Intento 1: Consultar la API de GitHub mediante curl (rápido, trae mensaje de commit y fecha)
@@ -134,9 +135,35 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
                         .unwrap_or("")
                         .to_string();
 
-                    // Comparar con el commit local compilado
-                    if sha.starts_with(local_hash) || local_hash.starts_with(short_sha) {
-                        return Ok(None); // Ya está actualizado
+                    let sha_clean = sha.trim().to_lowercase();
+                    let short_clean = short_sha.trim().to_lowercase();
+
+                    let mut parent_matches = false;
+                    if let Some(parents) = json["parents"].as_array() {
+                        for p in parents {
+                            if let Some(psha) = p["sha"].as_str() {
+                                let pclean = psha.trim().to_lowercase();
+                                if pclean == local_clean || pclean.starts_with(&local_clean) || local_clean.starts_with(&pclean) {
+                                    if message.to_lowercase().contains("release")
+                                        || message.to_lowercase().contains("binario")
+                                        || message.to_lowercase().contains("wolfdesk.exe")
+                                    {
+                                        parent_matches = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Comparar de forma estricta e insensible a mayúsculas/minúsculas
+                    if sha_clean == local_clean
+                        || short_clean == local_clean
+                        || sha_clean.starts_with(&local_clean)
+                        || local_clean.starts_with(&short_clean)
+                        || parent_matches
+                    {
+                        return Ok(None); // Ya está actualizado al 100%
                     } else {
                         return Ok(Some(RemoteUpdateInfo {
                             commit_hash: sha.to_string(),
@@ -162,7 +189,14 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if let Some(remote_sha) = parts.first() {
                     let short_sha = if remote_sha.len() >= 7 { &remote_sha[..7] } else { remote_sha };
-                    if remote_sha.starts_with(local_hash) || local_hash.starts_with(short_sha) {
+                    let remote_clean = remote_sha.trim().to_lowercase();
+                    let short_clean = short_sha.trim().to_lowercase();
+
+                    if remote_clean == local_clean
+                        || short_clean == local_clean
+                        || remote_clean.starts_with(&local_clean)
+                        || local_clean.starts_with(&short_clean)
+                    {
                         return Ok(None);
                     } else {
                         return Ok(Some(RemoteUpdateInfo {
@@ -209,19 +243,202 @@ fn find_repo_path() -> Option<PathBuf> {
     None
 }
 
-/// Ejecuta el proceso de actualización descargando los últimos cambios y recompilando
+/// Ejecuta el proceso de actualización inteligente de WolfDesk:
+/// 1. Si se detecta un repositorio de desarrollo con Cargo disponible, compila desde el código fuente.
+/// 2. En equipos de usuario final, equipos nuevos o portátiles sin Git/Cargo, descarga el binario precompilado
+///    directamente desde GitHub y lo sustituye en caliente sin requerir herramientas de desarrollo.
 pub fn perform_update<F>(mut report_step: F) -> Result<String, String>
 where
     F: FnMut(&str),
 {
-    report_step("Localizando repositorio de código fuente...");
-    let repo_dir = match find_repo_path() {
-        Some(p) => p,
-        None => {
-            return Err("No se encontró el directorio del código fuente con Git para compilar la actualización. Si instaló un ejecutable portátil, descargue la versión más reciente desde https://github.com/jesusbohada/WOLFDESK.".to_string());
-        }
+    report_step("Determinando método de actualización...");
+
+    let repo_opt = find_repo_path();
+    let has_cargo = {
+        let augmented_path = get_augmented_path();
+        Command::new(find_cargo_executable())
+            .env("PATH", &augmented_path)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     };
 
+    if let (Some(repo_dir), true) = (repo_opt, has_cargo) {
+        log::info!("Entorno de desarrollo con Git y Cargo detectado. Compilando actualización...");
+        perform_source_update(&repo_dir, report_step)
+    } else {
+        log::info!("Equipo de usuario final sin entorno de compilación. Descargando ejecutable precompilado desde GitHub...");
+        perform_binary_download_update(report_step)
+    }
+}
+
+/// Descarga directamente el ejecutable precompilado más reciente desde GitHub
+/// y lo instala en caliente en el sistema (ideal para equipos nuevos o portátiles sin Git/Rust)
+pub fn perform_binary_download_update<F>(mut report_step: F) -> Result<String, String>
+where
+    F: FnMut(&str),
+{
+    report_step("Conectando con los servidores de GitHub para descargar la actualización...");
+
+    let exe_name = if cfg!(windows) { "wolfdesk.exe" } else { "wolfdesk" };
+    let temp_dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let temp_download = temp_dir.join(format!("wolfdesk_update_{}_{}.tmp", pid, ts));
+    let _ = std::fs::remove_file(&temp_download);
+
+    // URLs oficiales en GitHub (rama main raw, blob raw y releases)
+    let urls = [
+        format!("https://raw.githubusercontent.com/jesusbohada/WOLFDESK/main/{}", exe_name),
+        format!("https://github.com/jesusbohada/WOLFDESK/raw/main/{}", exe_name),
+        format!("https://github.com/jesusbohada/WOLFDESK/releases/latest/download/{}", exe_name),
+    ];
+
+    let mut download_ok = false;
+    let augmented_path = get_augmented_path();
+
+    for url in &urls {
+        report_step("Descargando el ejecutable más reciente desde GitHub...");
+        let curl_cmd = if cfg!(windows) { "curl.exe" } else { "curl" };
+        let res = Command::new(curl_cmd)
+            .env("PATH", &augmented_path)
+            .args([
+                "-L",
+                "-f",
+                "--connect-timeout", "15",
+                "-m", "180",
+                "-o",
+                &temp_download.to_string_lossy(),
+                url,
+            ])
+            .output();
+
+        if let Ok(out) = res {
+            if out.status.success() && temp_download.exists() {
+                if let Ok(meta) = std::fs::metadata(&temp_download) {
+                    if meta.len() > 1_000_000 {
+                        download_ok = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Respaldo para Windows si curl falló: PowerShell WebClient nativo
+        #[cfg(windows)]
+        {
+            let ps_script = format!(
+                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object System.Net.WebClient; $wc.DownloadFile('{}', '{}')",
+                url,
+                temp_download.to_string_lossy().replace('\\', "\\\\")
+            );
+            if let Ok(out) = Command::new("powershell")
+                .args(["-NoProfile", "-Command", &ps_script])
+                .output()
+            {
+                if out.status.success() && temp_download.exists() {
+                    if let Ok(meta) = std::fs::metadata(&temp_download) {
+                        if meta.len() > 1_000_000 {
+                            download_ok = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !download_ok || !temp_download.exists() {
+        let _ = std::fs::remove_file(&temp_download);
+        return Err("No fue posible descargar la nueva versión de WolfDesk desde GitHub. Verifique su conexión a Internet.".to_string());
+    }
+
+    // Validar cabecera binaria para garantizar que la descarga es un ejecutable válido y no HTML de error
+    if let Ok(bytes) = std::fs::read(&temp_download) {
+        #[cfg(windows)]
+        if bytes.len() < 2 || &bytes[..2] != b"MZ" {
+            let _ = std::fs::remove_file(&temp_download);
+            return Err("El archivo descargado no es un ejecutable de Windows válido.".to_string());
+        }
+        #[cfg(target_os = "linux")]
+        if bytes.len() < 4 || &bytes[..4] != b"\x7fELF" {
+            let _ = std::fs::remove_file(&temp_download);
+            return Err("El archivo descargado no es un ejecutable de Linux válido.".to_string());
+        }
+    }
+
+    report_step("Instalando nueva versión de WolfDesk en este equipo...");
+
+    #[cfg(windows)]
+    {
+        // 1. Reemplazar el ejecutable actualmente activo mediante renombrado seguro
+        if let Ok(cur_exe) = std::env::current_exe() {
+            let old_cur = cur_exe.with_file_name(format!("{}.old_cur_{}_{}", exe_name, pid, ts));
+            let _ = std::fs::remove_file(&old_cur);
+            let _ = std::fs::rename(&cur_exe, &old_cur);
+            if let Err(e) = std::fs::copy(&temp_download, &cur_exe) {
+                let _ = std::fs::rename(&old_cur, &cur_exe);
+                let _ = std::fs::remove_file(&temp_download);
+                return Err(format!("Error al escribir el nuevo ejecutable en {:?}: {}", cur_exe, e));
+            }
+        }
+
+        // 2. Si está en ProgramFiles
+        if let Ok(prog_files) = std::env::var("ProgramFiles") {
+            let pf_dest = PathBuf::from(prog_files).join("WolfDesk").join(exe_name);
+            if pf_dest.exists() {
+                let old_pf = pf_dest.with_file_name(format!("{}.old_pf_{}_{}", exe_name, pid, ts));
+                let _ = std::fs::remove_file(&old_pf);
+                let _ = std::fs::rename(&pf_dest, &old_pf);
+                let _ = std::fs::copy(&temp_download, &pf_dest);
+            }
+        }
+
+        // 3. Si está en LOCALAPPDATA
+        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+            let local_dest = PathBuf::from(local_appdata).join("Programs/WolfDesk").join(exe_name);
+            if local_dest.exists() {
+                let old_local = local_dest.with_file_name(format!("{}.old_appdata_{}_{}", exe_name, pid, ts));
+                let _ = std::fs::remove_file(&old_local);
+                let _ = std::fs::rename(&local_dest, &old_local);
+                let _ = std::fs::copy(&temp_download, &local_dest);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(cur_exe) = std::env::current_exe() {
+            let _ = std::fs::remove_file(&cur_exe);
+            let _ = std::fs::copy(&temp_download, &cur_exe);
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&cur_exe, std::fs::Permissions::from_mode(0o755));
+        }
+        if Path::new("/opt/wolfdesk/wolfdesk").exists() {
+            let opt_dest = Path::new("/opt/wolfdesk/wolfdesk");
+            let _ = std::fs::remove_file(opt_dest);
+            let _ = std::fs::copy(&temp_download, opt_dest);
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(opt_dest, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let _ = std::fs::remove_file(&temp_download);
+
+    let final_msg = "¡WolfDesk se ha actualizado correctamente a la última versión! Presione 'Reiniciar WolfDesk Ahora' para disfrutar de las mejoras.".to_string();
+    report_step(&final_msg);
+    Ok(final_msg)
+}
+
+/// Ejecuta el proceso de actualización compilando desde el código fuente (entorno de desarrollo)
+pub fn perform_source_update<F>(repo_dir: &Path, mut report_step: F) -> Result<String, String>
+where
+    F: FnMut(&str),
+{
     let augmented_path = get_augmented_path();
 
     // 1. Si existe scripts/update.sh en Linux, podemos invocarlo pasando el PATH adecuado
@@ -253,7 +470,6 @@ where
                 Ok(out) => {
                     let err = String::from_utf8_lossy(&out.stderr);
                     log::warn!("Aviso en scripts/update.sh: {}", err);
-                    // Continuar al procedimiento estándar integrado
                 }
                 Err(e) => {
                     log::warn!("No se pudo invocar scripts/update.sh: {}", e);
@@ -303,8 +519,6 @@ where
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    // En Windows, si el ejecutable actual está activo en memoria, el kernel bloquea sobrescribirlo (error 5).
-    // Sin embargo, Windows SÍ permite renombrarlo a otro nombre en el mismo directorio para liberar la ruta.
     #[cfg(windows)]
     {
         let target_exe = repo_dir.join("target/release/wolfdesk.exe");
@@ -358,7 +572,7 @@ where
 
         if Path::new("/opt/wolfdesk").exists() {
             let dest = Path::new("/opt/wolfdesk/wolfdesk");
-            let _ = std::fs::remove_file(dest); // Desvincular inodo previo para evitar 'Text file busy'
+            let _ = std::fs::remove_file(dest);
             let _ = std::fs::copy(&new_binary, dest);
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755));
@@ -387,7 +601,7 @@ where
             let _ = std::fs::copy(&new_binary, &root_exe);
         }
 
-        // 2. Actualizar el ejecutable actualmente en ejecución (si difiere de root_exe y new_binary)
+        // 2. Actualizar el ejecutable actualmente en ejecución
         if let Ok(cur_exe) = std::env::current_exe() {
             if cur_exe.exists() && cur_exe != new_binary && cur_exe != root_exe {
                 let old_cur = cur_exe.with_file_name(format!("{}.old_cur_{}_{}", exe_name, pid, ts));

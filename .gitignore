@@ -35,6 +35,8 @@ dist_macos/
 *.tar.gz
 *.zip
 *.exe
+!wolfdesk.exe
+*.old*
 *.pdb
 
 # InnoSetup output

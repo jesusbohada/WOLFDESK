@@ -1616,17 +1616,28 @@ impl DashboardApp {
                     });
                 }
                 crate::updater::UpdateStatus::UpdateAvailable { current_commit, latest_commit, commit_message, date } => {
-                    egui::Frame::none()
-                        .fill(Color32::from_rgb(30, 27, 20))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(250, 204, 21)))
-                        .rounding(4.0)
-                        .inner_margin(10.0)
-                        .show(ui, |ui| {
-                            ui.label(RichText::new("⚡ ¡NUEVA VERSIÓN DETECTADA EN GITHUB!").strong().color(Color32::from_rgb(250, 204, 21)).size(14.0));
-                            ui.label(format!("• Versión actual instalada: {}", current_commit));
-                            ui.label(format!("• Nueva versión disponible: {} ({})", latest_commit, date));
-                            ui.label(RichText::new(format!("• Novedades: {}", commit_message)).italics().color(Color32::from_rgb(226, 232, 240)));
+                    let cur = current_commit.trim().to_lowercase();
+                    let lat = latest_commit.trim().to_lowercase();
+                    let is_same = cur == lat || (!cur.is_empty() && (cur.starts_with(&lat) || lat.starts_with(&cur)));
+
+                    if is_same {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("✅ WolfDesk está completamente actualizado a la última versión").color(Color32::from_rgb(52, 211, 153)).strong());
+                            ui.label(format!("(Commit actual: {})", current_commit));
                         });
+                    } else {
+                        egui::Frame::none()
+                            .fill(Color32::from_rgb(30, 27, 20))
+                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(250, 204, 21)))
+                            .rounding(4.0)
+                            .inner_margin(10.0)
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("⚡ ¡NUEVA VERSIÓN DETECTADA EN GITHUB!").strong().color(Color32::from_rgb(250, 204, 21)).size(14.0));
+                                ui.label(format!("• Versión actual instalada: {}", current_commit));
+                                ui.label(format!("• Nueva versión disponible: {} ({})", latest_commit, date));
+                                ui.label(RichText::new(format!("• Novedades: {}", commit_message)).italics().color(Color32::from_rgb(226, 232, 240)));
+                            });
+                    }
                 }
                 crate::updater::UpdateStatus::Updating { step } => {
                     egui::Frame::none()
@@ -1663,7 +1674,15 @@ impl DashboardApp {
                     }
                 });
 
-                let can_update = matches!(self.update_status, crate::updater::UpdateStatus::UpdateAvailable { .. });
+                let can_update = match &self.update_status {
+                    crate::updater::UpdateStatus::UpdateAvailable { current_commit, latest_commit, .. } => {
+                        let cur = current_commit.trim().to_lowercase();
+                        let lat = latest_commit.trim().to_lowercase();
+                        !cur.is_empty() && !lat.is_empty() && cur != lat && !cur.starts_with(&lat) && !lat.starts_with(&cur)
+                    }
+                    _ => false,
+                };
+
                 ui.add_enabled_ui(!is_busy && can_update, |ui| {
                     let mut btn = egui::Button::new(RichText::new("⚡ Actualizar WolfDesk Ahora").strong());
                     if can_update && !is_busy {
@@ -1676,7 +1695,7 @@ impl DashboardApp {
                         resp
                     };
                     if resp.clicked() {
-                        self.update_status = crate::updater::UpdateStatus::Updating { step: "Iniciando descarga y compilación...".to_string() };
+                        self.update_status = crate::updater::UpdateStatus::Updating { step: "Conectando con GitHub para actualizar...".to_string() };
                         let _ = self.tx_to_net.send(UiToNet::TriggerUpdate);
                     }
                 });
