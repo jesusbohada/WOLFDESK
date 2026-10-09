@@ -391,7 +391,16 @@ impl eframe::App for DashboardApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(&self.status_text).size(12.0));
+                    let header_status = if self.is_online {
+                        if self.admin_unlocked {
+                            format!("🟢 En línea en {}", self.config.server_url)
+                        } else {
+                            "🟢 En línea (Clúster Privado)".to_string()
+                        }
+                    } else {
+                        self.status_text.clone()
+                    };
+                    ui.label(RichText::new(header_status).size(12.0));
                 });
             });
             ui.add_space(10.0);
@@ -873,10 +882,10 @@ impl DashboardApp {
                 ui.add_space(8.0);
             }
 
-            ui.horizontal(|ui| {
-                ui.label("Servidor WolfDesk:");
-                ui.add_enabled(self.admin_unlocked, egui::TextEdit::singleline(&mut self.server_url_input).desired_width(340.0));
-                ui.add_enabled_ui(self.admin_unlocked, |ui| {
+            if self.admin_unlocked {
+                ui.horizontal(|ui| {
+                    ui.label("Servidor WolfDesk:");
+                    ui.add(egui::TextEdit::singleline(&mut self.server_url_input).desired_width(340.0));
                     if ui.button("Aplicar y Guardar").clicked() {
                         self.config.server_url = self.server_url_input.trim().to_string();
                         let _ = self.config.save();
@@ -884,12 +893,22 @@ impl DashboardApp {
                         crate::terminal_log::add_log(crate::terminal_log::LogLevel::Success, &format!("Servidor de señalización actualizado a: {}", self.config.server_url));
                     }
                 });
-            });
 
-            ui.add_space(10.0);
-            ui.label(RichText::new("Servidores STUN activos:").strong());
-            for stun in &self.config.stun_servers {
-                ui.label(format!(" • {}", stun));
+                ui.add_space(10.0);
+                ui.label(RichText::new("Servidores STUN activos:").strong());
+                for stun in &self.config.stun_servers {
+                    ui.label(format!(" • {}", stun));
+                }
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("Servidor WolfDesk:");
+                    let mut masked = "••••••••••••••••••••••••••••••••••••".to_string();
+                    ui.add_enabled(false, egui::TextEdit::singleline(&mut masked).desired_width(280.0));
+                    ui.label(RichText::new("🔒 Protegido y Oculto").color(Color32::from_rgb(148, 163, 184)).italics());
+                });
+
+                ui.add_space(8.0);
+                ui.label(RichText::new("Direccionamiento del clúster y STUN: •••••••• (Oculto al usuario)").weak());
             }
         });
 
@@ -968,11 +987,19 @@ impl DashboardApp {
                     }
                 });
 
-                let can_update = matches!(self.update_status, crate::updater::UpdateStatus::UpdateAvailable { .. } | crate::updater::UpdateStatus::UpToDate { .. });
+                let can_update = matches!(self.update_status, crate::updater::UpdateStatus::UpdateAvailable { .. });
                 ui.add_enabled_ui(!is_busy && can_update, |ui| {
-                    let btn = egui::Button::new(RichText::new("⚡ Actualizar WolfDesk Ahora").strong().color(Color32::WHITE))
-                        .fill(Color32::from_rgb(16, 185, 129));
-                    if ui.add(btn).clicked() {
+                    let mut btn = egui::Button::new(RichText::new("⚡ Actualizar WolfDesk Ahora").strong());
+                    if can_update && !is_busy {
+                        btn = btn.fill(Color32::from_rgb(16, 185, 129)).stroke(Stroke::new(1.0_f32, Color32::WHITE));
+                    }
+                    let resp = ui.add(btn);
+                    let resp = if !can_update {
+                        resp.on_disabled_hover_text("Ya tienes instalada la versión más reciente.")
+                    } else {
+                        resp
+                    };
+                    if resp.clicked() {
                         self.update_status = crate::updater::UpdateStatus::Updating { step: "Iniciando descarga y compilación...".to_string() };
                         let _ = self.tx_to_net.send(UiToNet::TriggerUpdate);
                     }
