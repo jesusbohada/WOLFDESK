@@ -187,7 +187,11 @@ fn draw_button(
 
     // Esquema de colores moderno y descansado a la vista
     let (bg_color, border_color, text_color) = if is_active {
-        (accent_color, 0xEF4444, 0xFFFFFF)
+        if accent_color == 0x0EA5E9 || accent_color == 0x0284C7 || accent_color == 0x00E5FF {
+            (0x0369A1, 0x38BDF8, 0xFFFFFF)
+        } else {
+            (accent_color, 0xEF4444, 0xFFFFFF)
+        }
     } else if accent_color == 0x991B1B || accent_color == 0x7F1D1D {
         // Botón crítico (Salir / Desconectar)
         if is_hovered {
@@ -201,6 +205,13 @@ fn draw_button(
             (0x452E0B, 0xFBBF24, 0xFFFFFF)
         } else {
             (0x2E1F05, 0xF59E0B, 0xFDE68A)
+        }
+    } else if accent_color == 0x0EA5E9 || accent_color == 0x0284C7 || accent_color == 0x00E5FF {
+        // Modo espectador / Archivos / Información
+        if is_hovered {
+            (0x0C4A6E, 0x38BDF8, 0xFFFFFF)
+        } else {
+            (0x082F49, 0x0EA5E9, 0xE0F2FE)
         }
     } else if is_hovered {
         (0x27354A, 0x00E5FF, 0xFFFFFF)
@@ -316,6 +327,9 @@ unsafe extern "system" fn low_level_keyboard_proc(
             let fg = GetForegroundWindow();
             let target_hwnd = HOOK_VIEWER_HWND.load(std::sync::atomic::Ordering::Relaxed);
             if fg.0 != 0 && fg.0 == target_hwnd {
+                if HOOK_VIEW_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+                    return CallNextHookEx(HHOOK(0), n_code, wparam, lparam);
+                }
                 let is_down = wparam.0 == WM_KEYDOWN as usize || wparam.0 == WM_SYSKEYDOWN as usize;
                 let is_up = wparam.0 == WM_KEYUP as usize || wparam.0 == WM_SYSKEYUP as usize;
                 if is_down || is_up {
@@ -337,12 +351,17 @@ unsafe extern "system" fn low_level_keyboard_proc(
 }
 
 pub static VIEWER_IS_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static HOOK_VIEW_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn start_viewer_window(
     title: &str,
     frame_rx: mpsc::Receiver<Vec<u8>>,
     control_tx: tokio::sync::mpsc::UnboundedSender<ControlEvent>,
+    tx_to_ui: std::sync::mpsc::Sender<crate::dashboard::NetToUi>,
+    initial_view_only: bool,
 ) {
+    let mut is_view_only = initial_view_only;
+    HOOK_VIEW_ONLY.store(is_view_only, std::sync::atomic::Ordering::Relaxed);
     VIEWER_IS_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
     let initial_width = 1600;
     let initial_height = 900;
@@ -605,12 +624,14 @@ pub fn start_viewer_window(
         }
 
         // 8. Botones de la barra superior (Coordenadas cliente exactas)
-        let btn_calidad_rect = (10, 6, 195, 26);
-        let btn_escala_rect = (212, 6, 170, 26);
-        let btn_grabar_rect = (389, 6, 132, 26);
-        let btn_win_rect = (528, 6, 85, 26);
-        let btn_ocultar_rect = (620, 6, 85, 26);
-        let btn_salir_rect = (712, 6, 80, 26);
+        let btn_calidad_rect = (10, 6, 185, 26);
+        let btn_escala_rect = (202, 6, 155, 26);
+        let btn_grabar_rect = (364, 6, 120, 26);
+        let btn_archivos_rect = (491, 6, 95, 26);
+        let btn_modo_rect = (593, 6, 125, 26);
+        let btn_win_rect = (725, 6, 80, 26);
+        let btn_ocultar_rect = (812, 6, 80, 26);
+        let btn_salir_rect = (899, 6, 75, 26);
         let btn_mostrar_rect = (10, 4, 85, 26);
 
         let is_in = |rect: (usize, usize, usize, usize)| {
@@ -674,9 +695,29 @@ pub fn start_viewer_window(
                     } else {
                         let _ = recorder.stop();
                     }
+                } else if is_in(btn_archivos_rect) {
+                    let _ = tx_to_ui.send(crate::dashboard::NetToUi::OpenFileTransfer);
+                    #[cfg(windows)]
+                    unsafe {
+                        use windows::core::w;
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+                        };
+                        let hwnd = FindWindowW(None, w!("WolfDesk Pro - Escritorio Remoto"));
+                        if hwnd.0 != 0 {
+                            let _ = ShowWindow(hwnd, SW_SHOW);
+                            let _ = ShowWindow(hwnd, SW_RESTORE);
+                            let _ = SetForegroundWindow(hwnd);
+                        }
+                    }
+                } else if is_in(btn_modo_rect) {
+                    is_view_only = !is_view_only;
+                    HOOK_VIEW_ONLY.store(is_view_only, std::sync::atomic::Ordering::Relaxed);
                 } else if is_in(btn_win_rect) {
-                    let _ = control_tx.send(ControlEvent::Keyboard { vk_code: 0x5B, down: true });
-                    let _ = control_tx.send(ControlEvent::Keyboard { vk_code: 0x5B, down: false });
+                    if !is_view_only {
+                        let _ = control_tx.send(ControlEvent::Keyboard { vk_code: 0x5B, down: true });
+                        let _ = control_tx.send(ControlEvent::Keyboard { vk_code: 0x5B, down: false });
+                    }
                 } else if is_in(btn_ocultar_rect) {
                     show_toolbar = false;
                 } else if is_in(btn_salir_rect) {
@@ -685,17 +726,19 @@ pub fn start_viewer_window(
             } else if is_over_mini_menu {
                 show_toolbar = true;
             } else if is_over_remote_image {
-                let _ = control_tx.send(ControlEvent::MouseButton {
-                    button: MouseButtonType::Left,
-                    down: true,
-                    x: Some(norm_x),
-                    y: Some(norm_y),
-                });
+                if !is_view_only {
+                    let _ = control_tx.send(ControlEvent::MouseButton {
+                        button: MouseButtonType::Left,
+                        down: true,
+                        x: Some(norm_x),
+                        y: Some(norm_y),
+                    });
+                }
             }
         }
 
         if left_just_released {
-            if !is_over_toolbar && !is_over_mini_menu {
+            if !is_over_toolbar && !is_over_mini_menu && !is_view_only {
                 let _ = control_tx.send(ControlEvent::MouseButton {
                     button: MouseButtonType::Left,
                     down: false,
@@ -708,7 +751,7 @@ pub fn start_viewer_window(
 
         if right_is_down != right_was_down {
             right_was_down = right_is_down;
-            if !is_over_toolbar && !is_over_mini_menu && is_over_remote_image {
+            if !is_over_toolbar && !is_over_mini_menu && is_over_remote_image && !is_view_only {
                 let _ = control_tx.send(ControlEvent::MouseButton {
                     button: MouseButtonType::Right,
                     down: right_is_down,
@@ -719,7 +762,7 @@ pub fn start_viewer_window(
         }
 
         // Movimiento del cursor sobre el escritorio remoto
-        if is_cursor_in_window && is_over_remote_image {
+        if is_cursor_in_window && is_over_remote_image && !is_view_only {
             let should_send = match last_mouse_pos {
                 Some((lx, ly)) => (lx - norm_x).abs() > 0.0005 || (ly - norm_y).abs() > 0.0005,
                 None => true,
@@ -736,7 +779,7 @@ pub fn start_viewer_window(
 
         // Rueda de desplazamiento (Scroll)
         if let Some((_, scroll_y)) = window.get_scroll_wheel() {
-            if scroll_y.abs() > 0.01 {
+            if scroll_y.abs() > 0.01 && !is_view_only {
                 let _ = control_tx.send(ControlEvent::MouseWheel {
                     delta_x: 0,
                     delta_y: scroll_y.round() as i32,
@@ -768,6 +811,16 @@ pub fn start_viewer_window(
                 ("Grabar (F9)", 0)
             };
             draw_button(&mut buffer, client_w, client_h, btn_grabar_rect, rec_lbl, is_in(btn_grabar_rect), recorder.is_recording, rec_col);
+
+            draw_button(&mut buffer, client_w, client_h, btn_archivos_rect, "Archivos", is_in(btn_archivos_rect), false, 0x0EA5E9);
+
+            let (modo_lbl, modo_acc) = if is_view_only {
+                ("Espectador", 0x0EA5E9)
+            } else {
+                ("Control", 0)
+            };
+            draw_button(&mut buffer, client_w, client_h, btn_modo_rect, modo_lbl, is_in(btn_modo_rect), is_view_only, modo_acc);
+
             draw_button(&mut buffer, client_w, client_h, btn_win_rect, "Win Key", is_in(btn_win_rect), false, 0);
             draw_button(&mut buffer, client_w, client_h, btn_ocultar_rect, "Ocultar", is_in(btn_ocultar_rect), false, 0);
             draw_button(&mut buffer, client_w, client_h, btn_salir_rect, "Salir", is_in(btn_salir_rect), false, 0x991B1B);
@@ -792,11 +845,13 @@ pub fn start_viewer_window(
             if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
                 continue;
             }
-            if let Some(vk_code) = minifb_key_to_vk(key) {
-                let _ = control_tx.send(ControlEvent::Keyboard {
-                    vk_code,
-                    down: true,
-                });
+            if !is_view_only {
+                if let Some(vk_code) = minifb_key_to_vk(key) {
+                    let _ = control_tx.send(ControlEvent::Keyboard {
+                        vk_code,
+                        down: true,
+                    });
+                }
             }
         }
 
@@ -805,18 +860,21 @@ pub fn start_viewer_window(
             if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
                 continue;
             }
-            if let Some(vk_code) = minifb_key_to_vk(key) {
-                let _ = control_tx.send(ControlEvent::Keyboard {
-                    vk_code,
-                    down: false,
-                });
+            if !is_view_only {
+                if let Some(vk_code) = minifb_key_to_vk(key) {
+                    let _ = control_tx.send(ControlEvent::Keyboard {
+                        vk_code,
+                        down: false,
+                    });
+                }
             }
         }
 
         // 12. Título dinámico
         let rec_tag = if recorder.is_recording { " | 🔴 GRABANDO" } else { "" };
         let reconn_tag = if is_reconnecting { " | ⚠️ Reconectando..." } else { "" };
-        let dynamic_title = format!("{} | {} | {}{}{}", title, current_quality_label, current_scale_mode.label(), rec_tag, reconn_tag);
+        let view_tag = if is_view_only { " | 👁️ ESPECTADOR" } else { "" };
+        let dynamic_title = format!("{} | {} | {}{}{}{}", title, current_quality_label, current_scale_mode.label(), rec_tag, reconn_tag, view_tag);
         window.set_title(&dynamic_title);
 
         let _ = window.update_with_buffer(&buffer, client_w, client_h);

@@ -17,6 +17,7 @@ pub enum UiToNet {
     Connect {
         target_id: String,
         password: Option<String>,
+        view_only: bool,
     },
     AcceptIncoming {
         from_id: String,
@@ -79,6 +80,7 @@ pub enum NetToUi {
         entries: Vec<proto::FileEntry>,
     },
     ShowWindow,
+    OpenFileTransfer,
     ExitApp,
     UpdateStatusChanged(crate::updater::UpdateStatus),
     UpdateProgress(String),
@@ -91,6 +93,7 @@ pub struct DashboardApp {
 
     pub target_id_input: String,
     pub password_input: String,
+    pub view_only_mode: bool,
     pub status_text: String,
     pub is_online: bool,
 
@@ -144,6 +147,7 @@ pub struct DashboardApp {
     // Reconexión automática y reestablecimiento de sesión
     pub saved_target_id: String,
     pub saved_password: Option<String>,
+    pub saved_view_only: bool,
     pub remote_session_state: RemoteSessionState,
     pub last_tick: std::time::Instant,
 
@@ -168,6 +172,7 @@ impl DashboardApp {
             active_tab: ActiveTab::Main,
             target_id_input: String::new(),
             password_input: String::new(),
+            view_only_mode: false,
             status_text: "Conectando al clúster WolfDesk...".to_string(),
             is_online: false,
             incoming_request_from: None,
@@ -203,6 +208,7 @@ impl DashboardApp {
             terminal_command: String::new(),
             saved_target_id: String::new(),
             saved_password: None,
+            saved_view_only: false,
             remote_session_state: RemoteSessionState::Idle,
             last_tick: std::time::Instant::now(),
             tx_to_net,
@@ -229,6 +235,7 @@ impl eframe::App for DashboardApp {
                     let _ = self.tx_to_net.send(UiToNet::Connect {
                         target_id: target_id.clone(),
                         password: self.saved_password.clone(),
+                        view_only: self.saved_view_only,
                     });
                 } else {
                     let tid = target_id.clone();
@@ -263,6 +270,18 @@ impl eframe::App for DashboardApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                }
+                NetToUi::OpenFileTransfer => {
+                    self.active_tab = ActiveTab::Files;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    if let Some(ref target) = self.active_peer_id {
+                        let _ = self.tx_to_net.send(UiToNet::RequestRemoteFiles {
+                            target_id: target.clone(),
+                            path: if self.remote_file_path.is_empty() { ".".to_string() } else { self.remote_file_path.clone() },
+                        });
+                    }
                 }
                 NetToUi::ExitApp => {
                     crate::restart_application();
@@ -314,6 +333,7 @@ impl eframe::App for DashboardApp {
                     let _ = self.tx_to_net.send(UiToNet::Connect {
                         target_id: target,
                         password: self.saved_password.clone(),
+                        view_only: self.saved_view_only,
                     });
                 }
                 NetToUi::SessionRejected(reason) => {
@@ -349,6 +369,7 @@ impl eframe::App for DashboardApp {
                             let _ = self.tx_to_net.send(UiToNet::Connect {
                                 target_id: tid,
                                 password: self.saved_password.clone(),
+                                view_only: self.saved_view_only,
                             });
                         }
                         _ => {
@@ -600,6 +621,7 @@ impl DashboardApp {
                                     let _ = self.tx_to_net.send(UiToNet::Connect {
                                         target_id: target_id.clone(),
                                         password: self.saved_password.clone(),
+                                        view_only: self.saved_view_only,
                                     });
                                 }
                             });
@@ -654,6 +676,7 @@ impl DashboardApp {
                                     let _ = self.tx_to_net.send(UiToNet::Connect {
                                         target_id: target_id.clone(),
                                         password: self.saved_password.clone(),
+                                        view_only: self.saved_view_only,
                                     });
                                 }
                             });
@@ -721,7 +744,22 @@ impl DashboardApp {
                     ui.add(egui::TextEdit::singleline(&mut self.password_input).password(true));
                 });
 
-                ui.add_space(15.0);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut self.view_only_mode,
+                        RichText::new("👁️ Modo Espectador (Solo lectura)")
+                            .strong()
+                            .color(Color32::from_rgb(0, 229, 255)),
+                    ).on_hover_text("Solo visualización: teclado y ratón remotos deshabilitados (ideal para auditoría, soporte y presentaciones)");
+                });
+                ui.label(
+                    RichText::new("Permite ver la pantalla sin interactuar. Transferencia de archivos, chat y grabación siguen activas.")
+                        .size(11.0)
+                        .color(Color32::from_rgb(148, 163, 184)),
+                );
+
+                ui.add_space(12.0);
                 let btn_text = RichText::new("🚀 CONECTAR CON WOLFDESK").strong().size(14.0).color(Color32::WHITE);
                 let connect_btn = egui::Button::new(btn_text).fill(Color32::from_rgb(14, 116, 144));
 
@@ -735,10 +773,12 @@ impl DashboardApp {
                         };
                         self.saved_target_id = target.clone();
                         self.saved_password = pass.clone();
+                        self.saved_view_only = self.view_only_mode;
                         self.remote_session_state = RemoteSessionState::Connecting { target_id: target.clone() };
                         let _ = self.tx_to_net.send(UiToNet::Connect {
                             target_id: target,
                             password: pass,
+                            view_only: self.view_only_mode,
                         });
                     }
                 }
@@ -995,10 +1035,12 @@ impl DashboardApp {
                     }
                     self.saved_target_id = id.clone();
                     self.saved_password = pass.clone();
+                    self.saved_view_only = self.view_only_mode;
                     self.remote_session_state = RemoteSessionState::Connecting { target_id: id.clone() };
                     let _ = self.tx_to_net.send(UiToNet::Connect {
                         target_id: id,
                         password: pass,
+                        view_only: self.view_only_mode,
                     });
                     self.active_tab = ActiveTab::Main;
                 }

@@ -187,6 +187,7 @@ fn main() -> Result<(), eframe::Error> {
     let shared_config: Arc<RwLock<AppConfig>> = Arc::new(RwLock::new(config.clone()));
     let active_streaming_quality: Arc<RwLock<u8>> = Arc::new(RwLock::new(88)); // 88% HD Nativa cristalina por defecto
     let last_frame_received: Arc<RwLock<Option<std::time::Instant>>> = Arc::new(RwLock::new(None));
+    let active_view_only: Arc<RwLock<bool>> = Arc::new(RwLock::new(false));
 
     // Gestor de transferencia de archivos
     let file_manager: Arc<Mutex<FileTransferManager>> = Arc::new(Mutex::new(FileTransferManager::new()));
@@ -295,11 +296,13 @@ fn main() -> Result<(), eframe::Error> {
             let active_perm_for_ui = active_permissions.clone();
             let shared_cfg_for_ui = shared_config.clone();
             let tx_ui_notify_cmd = tx_to_ui.clone();
+            let active_view_only_for_ui = active_view_only.clone();
 
             tokio::spawn(async move {
                 while let Some(cmd) = rx_from_ui.recv().await {
                     match cmd {
-                        UiToNet::Connect { target_id, password } => {
+                        UiToNet::Connect { target_id, password, view_only } => {
+                            *active_view_only_for_ui.write().await = view_only;
                             *target_for_ui.write().await = Some(target_id.clone());
                             let password_hash = password.map(|p| {
                                 use sha2::{Digest, Sha256};
@@ -472,6 +475,7 @@ fn main() -> Result<(), eframe::Error> {
             let viewer_ctrl_tx_clone = viewer_control_tx.clone();
             let quality_on_host = active_streaming_quality.clone();
             let file_manager_clone = file_manager.clone();
+            let active_view_only_for_accept = active_view_only.clone();
 
             while let Some(msg) = inbound_rx.recv().await {
                 match msg {
@@ -512,10 +516,16 @@ fn main() -> Result<(), eframe::Error> {
                             let (f_tx, f_rx) = std::sync::mpsc::channel::<Vec<u8>>();
                             *viewer_tx_clone.lock().unwrap() = Some(f_tx);
 
-                            let title = format!("🐺 WolfDesk - Sesión Activa con [{}]", from_id);
+                            let is_view_only = *active_view_only_for_accept.read().await;
+                            let title = if is_view_only {
+                                format!("🐺 WolfDesk - Sesión con [{}] [👁️ ESPECTADOR]", from_id)
+                            } else {
+                                format!("🐺 WolfDesk - Sesión Activa con [{}]", from_id)
+                            };
                             let ctrl_tx = viewer_ctrl_tx_clone.clone();
+                            let ui_tx = tx_ui_notify.clone();
                             std::thread::spawn(move || {
-                                start_viewer_window(&title, f_rx, ctrl_tx);
+                                start_viewer_window(&title, f_rx, ctrl_tx, ui_tx, is_view_only);
                             });
                         } else {
                             log::info!("🐺 [RECONECTADO] El visor ya está abierto para [{}]. Reanudando fotogramas...", from_id);
