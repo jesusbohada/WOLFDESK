@@ -67,21 +67,22 @@ pub fn restart_application() {
             let exe_str = exe.to_string_lossy().to_string();
             let parent_dir = exe.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
 
-            // Esperar 1s a que el proceso actual finalice, limpiar instancias colgadas y relanzar con su directorio activo
-            let cmd = if !parent_dir.is_empty() {
+            // Usar cmd.exe /C con start: no depende de PowerShell, no tiene bloqueos de políticas
+            // y desvincula completamente el nuevo proceso de la consola/proceso padre.
+            let batch_cmd = if !parent_dir.is_empty() {
                 format!(
-                    "Start-Sleep -Seconds 1; Stop-Process -Name wolfdesk -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Start-Process -FilePath '{}' -WorkingDirectory '{}'",
-                    exe_str, parent_dir
+                    "timeout /t 1 /nobreak >nul & taskkill /F /IM wolfdesk.exe /T >nul 2>&1 & cd /d \"{}\" & start \"\" \"{}\"",
+                    parent_dir, exe_str
                 )
             } else {
                 format!(
-                    "Start-Sleep -Seconds 1; Stop-Process -Name wolfdesk -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Start-Process -FilePath '{}'",
+                    "timeout /t 1 /nobreak >nul & taskkill /F /IM wolfdesk.exe /T >nul 2>&1 & start \"\" \"{}\"",
                     exe_str
                 )
             };
 
-            let _ = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &cmd])
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", &batch_cmd])
                 .spawn();
         }
     }
@@ -96,16 +97,10 @@ pub fn terminate_application() {
 
     #[cfg(windows)]
     {
-        // En Windows, ejecutar PowerShell en segundo plano para limpiar cualquier proceso
+        // En Windows, ejecutar taskkill para limpiar cualquier proceso
         // o subproceso remanente de wolfdesk de inmediato y desbloquear el .exe
-        let _ = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                "Start-Sleep -Milliseconds 150; Stop-Process -Name wolfdesk -Force -ErrorAction SilentlyContinue",
-            ])
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "timeout /t 1 /nobreak >nul & taskkill /F /IM wolfdesk.exe /T >nul 2>&1"])
             .spawn();
     }
 
