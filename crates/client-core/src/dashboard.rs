@@ -110,6 +110,7 @@ pub struct DashboardApp {
     pub contact_search_query: String,
     pub contact_alias_input: String,
     pub contact_id_input: String,
+    pub contact_password_input: String,
     pub contact_notes_input: String,
     pub editing_contact_id: Option<String>,
     pub show_contact_form: bool,
@@ -166,6 +167,7 @@ impl DashboardApp {
             contact_search_query: String::new(),
             contact_alias_input: String::new(),
             contact_id_input: String::new(),
+            contact_password_input: String::new(),
             contact_notes_input: String::new(),
             editing_contact_id: None,
             show_contact_form: false,
@@ -485,9 +487,10 @@ impl DashboardApp {
                     ui.label("ID Remoto:");
                     ui.text_edit_singleline(&mut self.target_id_input);
                     if !self.target_id_input.trim().is_empty() {
-                        if ui.button("⭐ Guardar").on_hover_text("Guardar este ID en tu libreta de contactos").clicked() {
+                        if ui.button("⭐ Guardar").on_hover_text("Guardar este ID y contraseña en tu libreta de contactos").clicked() {
                             self.contact_id_input = self.target_id_input.trim().to_string();
                             self.contact_alias_input = String::new();
+                            self.contact_password_input = self.password_input.clone();
                             self.contact_notes_input = String::new();
                             self.editing_contact_id = None;
                             self.show_contact_form = true;
@@ -537,9 +540,13 @@ impl DashboardApp {
                 });
                 ui.horizontal_wrapped(|ui| {
                     for contact in self.config.contacts.clone() {
-                        let label = format!("🏷️ {} ({})", contact.alias, contact.id);
+                        let pass_badge = if contact.password.is_some() { " 🔒" } else { "" };
+                        let label = format!("🏷️ {} ({}){}", contact.alias, contact.id, pass_badge);
                         if ui.button(RichText::new(label).strong()).on_hover_text(format!("Cargar ID {} de {}", contact.id, contact.alias)).clicked() {
                             self.target_id_input = contact.id.clone();
+                            if let Some(ref pass) = contact.password {
+                                self.password_input = pass.clone();
+                            }
                         }
                     }
                 });
@@ -575,6 +582,7 @@ impl DashboardApp {
                         if self.show_contact_form && self.editing_contact_id.is_none() {
                             self.contact_alias_input.clear();
                             self.contact_id_input.clear();
+                            self.contact_password_input.clear();
                             self.contact_notes_input.clear();
                         }
                     }
@@ -609,8 +617,12 @@ impl DashboardApp {
                             ui.add(egui::TextEdit::singleline(&mut self.contact_id_input).hint_text("ej. 770 130 282"));
                             ui.end_row();
 
+                            ui.label("Contraseña (Opcional):");
+                            ui.add(egui::TextEdit::singleline(&mut self.contact_password_input).password(true).hint_text("Clave para conexión desatendida"));
+                            ui.end_row();
+
                             ui.label("Notas (Opcional):");
-                            ui.add(egui::TextEdit::singleline(&mut self.contact_notes_input).hint_text("ej. Contraseña de acceso desatendido, piso, etc."));
+                            ui.add(egui::TextEdit::singleline(&mut self.contact_notes_input).hint_text("ej. Piso 3, Servidor de backups, etc."));
                             ui.end_row();
                         });
 
@@ -621,14 +633,20 @@ impl DashboardApp {
                                 if ui.add(egui::Button::new(RichText::new("💾 Guardar Contacto").strong().color(Color32::WHITE)).fill(Color32::from_rgb(16, 185, 129))).clicked() {
                                     let id = self.contact_id_input.trim().to_string();
                                     let alias = self.contact_alias_input.trim().to_string();
+                                    let pass = if self.contact_password_input.trim().is_empty() {
+                                        None
+                                    } else {
+                                        Some(self.contact_password_input.trim())
+                                    };
                                     let notes = self.contact_notes_input.trim().to_string();
-                                    self.config.save_contact(&id, &alias, &notes);
+                                    self.config.save_contact(&id, &alias, pass, &notes);
                                     let _ = self.tx_to_net.send(UiToNet::UpdateConfig(self.config.clone()));
                                     self.contact_feedback = Some(format!("Contacto guardado: {}", if alias.is_empty() { &id } else { &alias }));
                                     self.show_contact_form = false;
                                     self.editing_contact_id = None;
                                     self.contact_alias_input.clear();
                                     self.contact_id_input.clear();
+                                    self.contact_password_input.clear();
                                     self.contact_notes_input.clear();
                                 }
                             });
@@ -636,6 +654,7 @@ impl DashboardApp {
                             if ui.button("Cancelar").clicked() {
                                 self.show_contact_form = false;
                                 self.editing_contact_id = None;
+                                self.contact_password_input.clear();
                             }
                         });
                     });
@@ -683,7 +702,7 @@ impl DashboardApp {
                     ui.add_space(20.0);
                 });
             } else {
-                let mut contact_to_connect = None;
+                let mut contact_to_connect: Option<(String, Option<String>)> = None;
                 let mut contact_to_delete = None;
                 let mut contact_to_edit = None;
 
@@ -701,6 +720,9 @@ impl DashboardApp {
                                         ui.horizontal(|ui| {
                                             ui.label(RichText::new(&contact.alias).strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
                                             ui.label(RichText::new(format!("[ID: {}]", contact.id)).monospace().color(Color32::WHITE).strong());
+                                            if contact.password.is_some() {
+                                                ui.label(RichText::new("🔒 Clave").color(Color32::from_rgb(52, 211, 153)).size(11.0).strong());
+                                            }
                                         });
                                         if !contact.notes.is_empty() {
                                             ui.label(RichText::new(format!("📝 {}", contact.notes)).italics().size(12.0).weak());
@@ -722,7 +744,7 @@ impl DashboardApp {
                                         }
 
                                         if ui.add(egui::Button::new(RichText::new("🚀 Conectar").strong().color(Color32::WHITE)).fill(Color32::from_rgb(14, 116, 144))).clicked() {
-                                            contact_to_connect = Some(contact.id.clone());
+                                            contact_to_connect = Some((contact.id.clone(), contact.password.clone()));
                                         }
                                     });
                                 });
@@ -731,11 +753,16 @@ impl DashboardApp {
                     }
                 });
 
-                if let Some(id) = contact_to_connect {
+                if let Some((id, pass)) = contact_to_connect {
                     self.target_id_input = id.clone();
+                    if let Some(ref p) = pass {
+                        self.password_input = p.clone();
+                    } else {
+                        self.password_input.clear();
+                    }
                     let _ = self.tx_to_net.send(UiToNet::Connect {
                         target_id: id,
-                        password: None,
+                        password: pass,
                     });
                     self.active_tab = ActiveTab::Main;
                 }
@@ -749,6 +776,7 @@ impl DashboardApp {
                 if let Some(c) = contact_to_edit {
                     self.contact_id_input = c.id.clone();
                     self.contact_alias_input = c.alias.clone();
+                    self.contact_password_input = c.password.unwrap_or_default();
                     self.contact_notes_input = c.notes.clone();
                     self.editing_contact_id = Some(c.id);
                     self.show_contact_form = true;

@@ -11,6 +11,8 @@ pub struct Contact {
     pub id: String,
     pub alias: String,
     #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
     pub notes: String,
     #[serde(default)]
     pub created_at: String,
@@ -103,7 +105,7 @@ impl AppConfig {
     }
 
     /// Guarda o actualiza un contacto en la libreta de direcciones
-    pub fn save_contact(&mut self, id: &str, alias: &str, notes: &str) {
+    pub fn save_contact(&mut self, id: &str, alias: &str, password: Option<&str>, notes: &str) {
         let clean_id = id.trim().to_string();
         let clean_alias = if alias.trim().is_empty() {
             format!("Equipo {}", clean_id)
@@ -111,6 +113,9 @@ impl AppConfig {
             alias.trim().to_string()
         };
         let clean_notes = notes.trim().to_string();
+        let clean_password = password
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
 
         if clean_id.is_empty() {
             return;
@@ -118,6 +123,7 @@ impl AppConfig {
 
         if let Some(existing) = self.contacts.iter_mut().find(|c| c.id == clean_id) {
             existing.alias = clean_alias;
+            existing.password = clean_password;
             existing.notes = clean_notes;
         } else {
             let timestamp = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
@@ -127,6 +133,7 @@ impl AppConfig {
             self.contacts.push(Contact {
                 id: clean_id,
                 alias: clean_alias,
+                password: clean_password,
                 notes: clean_notes,
                 created_at: timestamp,
             });
@@ -158,21 +165,24 @@ mod tests {
         let mut cfg = AppConfig::default();
         assert!(cfg.contacts.is_empty());
 
-        cfg.save_contact("123456789", "Oficina", "Planta 2");
+        cfg.save_contact("123456789", "Oficina", Some("1234"), "Planta 2");
         assert_eq!(cfg.contacts.len(), 1);
         assert_eq!(cfg.contacts[0].id, "123456789");
         assert_eq!(cfg.contacts[0].alias, "Oficina");
+        assert_eq!(cfg.contacts[0].password, Some("1234".to_string()));
         assert_eq!(cfg.contacts[0].notes, "Planta 2");
 
-        // Actualizar alias y notas del mismo contacto
-        cfg.save_contact("123456789", "Oficina Central", "Piso 5");
+        // Actualizar alias, contraseña y notas del mismo contacto
+        cfg.save_contact("123456789", "Oficina Central", Some("pass999"), "Piso 5");
         assert_eq!(cfg.contacts.len(), 1);
         assert_eq!(cfg.contacts[0].alias, "Oficina Central");
+        assert_eq!(cfg.contacts[0].password, Some("pass999".to_string()));
         assert_eq!(cfg.contacts[0].notes, "Piso 5");
 
-        // Añadir otro contacto
-        cfg.save_contact("987654321", "PC Casa", "");
+        // Añadir otro contacto sin contraseña
+        cfg.save_contact("987654321", "PC Casa", None, "");
         assert_eq!(cfg.contacts.len(), 2);
+        assert_eq!(cfg.contacts[1].password, None);
 
         // Eliminar primer contacto
         cfg.remove_contact("123456789");
