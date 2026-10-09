@@ -11,7 +11,15 @@ if (Test-Path ".git") {
     git checkout main
     git pull origin main
 
-    # Si wolfdesk.exe está en ejecución, Windows bloquea sobrescribirlo directamente. Renombramos a .old para permitir la compilación limpia.
+    # Si wolfdesk está corriendo, lo cerramos limpiamente
+    $RunningProc = Get-Process -Name wolfdesk -ErrorAction SilentlyContinue
+    if ($RunningProc) {
+        Write-Host "[*] Cerrando instancia activa de WolfDesk en ejecucion..." -ForegroundColor Yellow
+        Stop-Process -Name wolfdesk -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+
+    # Si el archivo wolfdesk.exe sigue en uso, renombramos a .old para permitir la compilación limpia.
     $TargetExe = "target\release\wolfdesk.exe"
     if (Test-Path $TargetExe) {
         $Ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
