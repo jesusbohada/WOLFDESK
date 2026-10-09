@@ -675,4 +675,13 @@ mod tests {
         };
         assert!(matches!(status2, UpdateStatus::UpToDate { .. }));
     }
+
+    #[test]
+    fn test_check_for_updates_live() {
+        let res = check_for_updates();
+        println!("check_for_updates res = {:?}", res);
+        assert!(res.is_ok());
+        let update_opt = res.unwrap();
+        assert!(update_opt.is_none(), "Debe detectar que el sistema está completamente actualizado");
+    }
 }
