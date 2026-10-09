@@ -47,13 +47,16 @@ echo -e "${BLUE}[*] Directorio de trabajo:${NC} ${YELLOW}$REPO_DIR${NC}"
 cd "$REPO_DIR"
 
 # 3. Descargar los últimos cambios desde GitHub
-echo -e "${BLUE}[*] Descargando últimos cambios desde GitHub (git pull origin main)...${NC}"
+echo -e "${BLUE}[*] Descargando últimos cambios desde GitHub (git fetch y git reset)...${NC}"
 git fetch origin main
-git checkout main
-git pull origin main
+git checkout -f main
+git reset --hard origin/main
 
 # 4. Compilar el binario optimizado
 echo -e "${BLUE}[*] Compilando la versión más reciente con Cargo (Release)...${NC}"
+touch "$REPO_DIR/crates/client-core/build.rs" 2>/dev/null || true
+COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "10eb531")
+export WOLFDESK_BUILD_GIT_HASH="$COMMIT_HASH"
 cargo build --release --bin wolfdesk
 
 NEW_BIN="$REPO_DIR/target/release/wolfdesk"
@@ -80,18 +83,20 @@ if [ -f "/etc/systemd/system/wolfdesk.service" ]; then
     systemctl daemon-reload || true
 fi
 
-COMMIT_HASH=$(git rev-parse --short HEAD)
 echo -e "${GREEN}====================================================${NC}"
 echo -e "${GREEN} [✓] ¡WolfDesk actualizado exitosamente a [$COMMIT_HASH]! ${NC}"
 echo -e "${GREEN}====================================================${NC}"
-echo -e "Cerrando instancias anteriores para aplicar los cambios..."
-pkill -9 -f /opt/wolfdesk/wolfdesk 2>/dev/null || true
-pkill -9 -f target/release/wolfdesk 2>/dev/null || true
-sleep 1
 
-if [ -f "/etc/systemd/system/wolfdesk.service" ] && systemctl is-active --quiet wolfdesk; then
-    echo -e "${BLUE}[*] Reiniciando servicio wolfdesk.service...${NC}"
-    systemctl restart wolfdesk
+if [ -z "$WOLFDESK_IN_APP_UPDATE" ]; then
+    echo -e "Cerrando instancias anteriores para aplicar los cambios..."
+    pkill -9 -f /opt/wolfdesk/wolfdesk 2>/dev/null || true
+    pkill -9 -f target/release/wolfdesk 2>/dev/null || true
+    sleep 1
+
+    if [ -f "/etc/systemd/system/wolfdesk.service" ] && systemctl is-active --quiet wolfdesk; then
+        echo -e "${BLUE}[*] Reiniciando servicio wolfdesk.service...${NC}"
+        systemctl restart wolfdesk
+    fi
 fi
 
 echo -e "${GREEN}[✓] Todo listo. Puedes iniciar WolfDesk ahora con:${NC} ${YELLOW}wolfdesk${NC} o ${YELLOW}./target/release/wolfdesk${NC}"

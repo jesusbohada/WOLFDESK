@@ -232,6 +232,7 @@ where
             let res = Command::new("bash")
                 .arg(&update_script)
                 .env("PATH", &augmented_path)
+                .env("WOLFDESK_IN_APP_UPDATE", "1")
                 .output();
             match res {
                 Ok(out) if out.status.success() => {
@@ -244,7 +245,7 @@ where
                         .and_then(|o| String::from_utf8(o.stdout).ok())
                         .unwrap_or_else(|| "nuevo".to_string());
 
-                    let final_msg = format!("WolfDesk actualizado exitosamente al commit [{}]. Reinicie para aplicar.", commit_hash.trim());
+                    let final_msg = format!("WolfDesk actualizado exitosamente al commit [{}]. Reinicie la aplicación para aplicar.", commit_hash.trim());
                     report_step(&final_msg);
                     return Ok(final_msg);
                 }
@@ -260,24 +261,46 @@ where
         }
     }
 
-    report_step("Descargando últimos cambios desde GitHub (git fetch y pull)...");
-    let fetch_res = Command::new("git")
+    report_step("Descargando últimos cambios desde GitHub...");
+    let _ = Command::new("git")
         .current_dir(&repo_dir)
         .env("PATH", &augmented_path)
         .args(["fetch", "origin", "main"])
         .output();
-    if let Err(e) = fetch_res {
-        return Err(format!("Error al ejecutar git fetch: {}", e));
-    }
 
-    let pull_res = Command::new("git")
+    let _ = Command::new("git")
         .current_dir(&repo_dir)
         .env("PATH", &augmented_path)
-        .args(["pull", "origin", "main"])
+        .args(["checkout", "-f", "main"])
         .output();
-    if let Err(e) = pull_res {
-        return Err(format!("Error al ejecutar git pull: {}", e));
+
+    let reset_res = Command::new("git")
+        .current_dir(&repo_dir)
+        .env("PATH", &augmented_path)
+        .args(["reset", "--hard", "origin/main"])
+        .output();
+    if let Err(e) = reset_res {
+        return Err(format!("Error al sincronizar con origin/main: {}", e));
     }
+
+    // Forzar a Cargo a no cachear build.rs y recompilar con el nuevo hash
+    let build_rs = repo_dir.join("crates/client-core/build.rs");
+    if build_rs.exists() {
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open(&build_rs);
+    }
+
+    let git_hash = Command::new("git")
+        .current_dir(&repo_dir)
+        .env("PATH", &augmented_path)
+        .args(["rev-parse", "--short=7", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
 
     // En Windows, si el ejecutable actual está activo en memoria, el kernel bloquea sobrescribirlo (error 5).
     // Sin embargo, Windows SÍ permite renombrarlo a otro nombre en el mismo directorio para liberar la ruta.
@@ -301,6 +324,7 @@ where
     let cargo_res = Command::new(&cargo_bin)
         .current_dir(&repo_dir)
         .env("PATH", &augmented_path)
+        .env("WOLFDESK_BUILD_GIT_HASH", &git_hash)
         .args(["build", "--release", "--bin", "wolfdesk"])
         .output();
 
