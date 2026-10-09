@@ -125,14 +125,40 @@ impl FileTransferManager {
         None
     }
 
+    /// Obtiene la ruta del directorio Home del usuario del sistema operativo (Windows / Linux)
+    pub fn get_user_home_dir() -> String {
+        #[cfg(windows)]
+        {
+            if let Ok(prof) = std::env::var("USERPROFILE") {
+                if Path::new(&prof).exists() {
+                    return prof;
+                }
+            }
+            if let (Ok(drive), Ok(path)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+                let combined = format!("{}{}", drive, path);
+                if Path::new(&combined).exists() {
+                    return combined;
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if let Ok(home) = std::env::var("HOME") {
+                if Path::new(&home).exists() {
+                    return home;
+                }
+            }
+        }
+        ".".to_string()
+    }
+
     /// Lista carpetas y archivos en una ruta de forma ordenada (carpetas primero)
     pub fn list_directory(target_path: &str) -> (String, Vec<proto::FileEntry>) {
-        let p = if target_path.trim().is_empty() {
-            std::env::var("USERPROFILE")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("."))
+        let trimmed = target_path.trim();
+        let p = if trimmed.is_empty() || trimmed == "~" || trimmed == "HOME" {
+            PathBuf::from(Self::get_user_home_dir())
         } else {
-            PathBuf::from(target_path)
+            PathBuf::from(trimmed)
         };
 
         let resolved_path = match p.canonicalize() {

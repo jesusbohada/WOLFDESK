@@ -8,7 +8,7 @@ use std::time::Duration;
 use windows::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::ScreenToClient,
-    UI::Input::KeyboardAndMouse::GetAsyncKeyState,
+    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetKeyboardState, ToUnicode},
     UI::WindowsAndMessaging::{
         CallNextHookEx, GetClientRect, GetCursorPos, GetForegroundWindow, SetWindowsHookExW,
         UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
@@ -310,9 +310,24 @@ fn minifb_key_to_vk(key: Key) -> Option<u16> {
 }
 
 #[cfg(windows)]
+unsafe fn try_translate_to_unicode(vk: u32, scan: u32) -> Option<String> {
+    let mut key_state = [0u8; 256];
+    let _ = GetKeyboardState(&mut key_state);
+    let mut utf16_buf = [0u16; 8];
+    let len = ToUnicode(vk, scan, Some(&key_state), &mut utf16_buf, 0);
+    if len > 0 {
+        String::from_utf16(&utf16_buf[..len as usize]).ok()
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
 static HOOK_VIEWER_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(windows)]
 static HOOK_TX: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<ControlEvent>>> = std::sync::Mutex::new(None);
+#[cfg(windows)]
+static WIN_KEY_IS_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(windows)]
 unsafe extern "system" fn low_level_keyboard_proc(
@@ -322,16 +337,20 @@ unsafe extern "system" fn low_level_keyboard_proc(
 ) -> LRESULT {
     if n_code >= 0 {
         let kbd = *(lparam.0 as *const KBDLLHOOKSTRUCT);
-        // Interceptar tecla Windows física (VK_LWIN = 0x5B, VK_RWIN = 0x5C)
-        if kbd.vkCode == 0x5B || kbd.vkCode == 0x5C {
-            let fg = GetForegroundWindow();
-            let target_hwnd = HOOK_VIEWER_HWND.load(std::sync::atomic::Ordering::Relaxed);
-            if fg.0 != 0 && fg.0 == target_hwnd {
-                if HOOK_VIEW_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
-                    return CallNextHookEx(HHOOK(0), n_code, wparam, lparam);
-                }
-                let is_down = wparam.0 == WM_KEYDOWN as usize || wparam.0 == WM_SYSKEYDOWN as usize;
-                let is_up = wparam.0 == WM_KEYUP as usize || wparam.0 == WM_SYSKEYUP as usize;
+        let fg = GetForegroundWindow();
+        let target_hwnd = HOOK_VIEWER_HWND.load(std::sync::atomic::Ordering::Relaxed);
+
+        if fg.0 != 0 && fg.0 == target_hwnd {
+            if HOOK_VIEW_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+                return CallNextHookEx(HHOOK(0), n_code, wparam, lparam);
+            }
+
+            let is_down = wparam.0 == WM_KEYDOWN as usize || wparam.0 == WM_SYSKEYDOWN as usize;
+            let is_up = wparam.0 == WM_KEYUP as usize || wparam.0 == WM_SYSKEYUP as usize;
+
+            // 1. Interceptar y rastrear tecla Windows física (VK_LWIN = 0x5B, VK_RWIN = 0x5C)
+            if kbd.vkCode == 0x5B || kbd.vkCode == 0x5C {
+                WIN_KEY_IS_HELD.store(is_down, std::sync::atomic::Ordering::Relaxed);
                 if is_down || is_up {
                     if let Ok(guard) = HOOK_TX.lock() {
                         if let Some(tx) = guard.as_ref() {
@@ -343,6 +362,90 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     }
                 }
                 // Retornar 1 para suprimir el menú de inicio local en el equipo cliente
+                return LRESULT(1);
+            }
+
+            // 2. Interceptar combinaciones con tecla Windows (Win+R, Win+E, Win+D, Win+X, Win+L, Win+1..9, etc.)
+            if WIN_KEY_IS_HELD.load(std::sync::atomic::Ordering::Relaxed) {
+                if is_down || is_up {
+                    if let Ok(guard) = HOOK_TX.lock() {
+                        if let Some(tx) = guard.as_ref() {
+                            let _ = tx.send(ControlEvent::Keyboard {
+                                vk_code: kbd.vkCode as u16,
+                                down: is_down,
+                            });
+                        }
+                    }
+                }
+                // Suprimir ejecución local de atajos de Windows en el equipo cliente
+                return LRESULT(1);
+            }
+
+            // 3. Teclas de función del visor (F1..F5, F9): permitir que lleguen a la ventana minifb
+            if matches!(kbd.vkCode, 0x70 | 0x71 | 0x72 | 0x73 | 0x74 | 0x78) {
+                return CallNextHookEx(HHOOK(0), n_code, wparam, lparam);
+            }
+
+            // 4. Modificadores puros (Shift, Ctrl, Alt)
+            let is_modifier = matches!(kbd.vkCode, 0x10 | 0x11 | 0x12 | 0xA0..=0xA5);
+            if is_modifier {
+                if is_down || is_up {
+                    if let Ok(guard) = HOOK_TX.lock() {
+                        if let Some(tx) = guard.as_ref() {
+                            let _ = tx.send(ControlEvent::Keyboard {
+                                vk_code: kbd.vkCode as u16,
+                                down: is_down,
+                            });
+                        }
+                    }
+                }
+                return CallNextHookEx(HHOOK(0), n_code, wparam, lparam);
+            }
+
+            // 5. Teclas de navegación y control del sistema (Backspace, Enter, Tab, Esc, Flechas, Del, etc.)
+            let is_nav_control = matches!(
+                kbd.vkCode,
+                0x08 /* Backspace */ | 0x09 /* Tab */ | 0x0D /* Enter */ | 0x1B /* Esc */
+                | 0x20 /* Space */ | 0x21 /* PageUp */ | 0x22 /* PageDown */ | 0x23 /* End */
+                | 0x24 /* Home */ | 0x25..=0x28 /* Arrows */ | 0x2D /* Insert */ | 0x2E /* Delete */
+                | 0x75..=0x77 /* F6-F8 */ | 0x79..=0x7B /* F10-F12 */
+            );
+
+            // Verificar si Ctrl o Alt están activos para atajos estándar (Ctrl+C, Ctrl+V, Alt+Tab, etc.)
+            let ctrl_down = (GetAsyncKeyState(0x11) as u16 & 0x8000 != 0)
+                || (GetAsyncKeyState(0xA2) as u16 & 0x8000 != 0);
+            let ralt_down = GetAsyncKeyState(0xA5) as u16 & 0x8000 != 0;
+            let alt_down = (GetAsyncKeyState(0x12) as u16 & 0x8000 != 0)
+                || (GetAsyncKeyState(0xA4) as u16 & 0x8000 != 0);
+            let is_alt_gr = ctrl_down && ralt_down;
+
+            if is_nav_control || (ctrl_down && !is_alt_gr) || (alt_down && !is_alt_gr) {
+                if is_down || is_up {
+                    if let Ok(guard) = HOOK_TX.lock() {
+                        if let Some(tx) = guard.as_ref() {
+                            let _ = tx.send(ControlEvent::Keyboard {
+                                vk_code: kbd.vkCode as u16,
+                                down: is_down,
+                            });
+                        }
+                    }
+                }
+                return LRESULT(1);
+            }
+
+            // 6. Caracteres Unicode / Texto / Símbolos / Acentos (á, é, í, ó, ú, ñ, @, #, $, ¿, ¡, ~, {, }, [, ], etc.)
+            if is_down {
+                if let Some(text) = try_translate_to_unicode(kbd.vkCode, kbd.scanCode) {
+                    if !text.is_empty() && text.chars().all(|c| c >= ' ' && c != '\x7F') {
+                        if let Ok(guard) = HOOK_TX.lock() {
+                            if let Some(tx) = guard.as_ref() {
+                                let _ = tx.send(ControlEvent::KeyboardUnicode { text });
+                            }
+                        }
+                        return LRESULT(1);
+                    }
+                }
+            } else if is_up {
                 return LRESULT(1);
             }
         }
@@ -359,6 +462,9 @@ pub fn start_viewer_window(
     control_tx: tokio::sync::mpsc::UnboundedSender<ControlEvent>,
     tx_to_ui: std::sync::mpsc::Sender<crate::dashboard::NetToUi>,
     initial_view_only: bool,
+    initial_quality: u8,
+    initial_scale_mode: u8,
+    initial_fps_limit: u32,
 ) {
     let mut is_view_only = initial_view_only;
     HOOK_VIEW_ONLY.store(is_view_only, std::sync::atomic::Ordering::Relaxed);
@@ -421,11 +527,33 @@ pub fn start_viewer_window(
     let mut last_frame_time = std::time::Instant::now();
     let mut had_first_frame = false;
 
-    // Perfiles dinámicos: por defecto HD Nativa (88%)
-    let mut quality_tier = 2u8; // 0=40%, 1=70%, 2=88%, 3=96%
-    let mut current_quality_label = "HD Nativa (88%)";
-    let mut current_scale_mode = ScaleAdaptation::AspectRatioFit;
+    // Perfiles dinámicos según las preferencias seleccionadas
+    let mut quality_tier = match initial_quality {
+        0..=55 => 0u8,
+        56..=75 => 1u8,
+        76..=90 => 2u8,
+        _ => 3u8,
+    };
+    let mut current_quality_label = match quality_tier {
+        0 => "Rápida (40%)",
+        1 => "Equilibrada (70%)",
+        2 => "HD Nativa (88%)",
+        _ => "4K Ultra (96%)",
+    };
+    let mut current_scale_mode = match initial_scale_mode {
+        0 => ScaleAdaptation::Original100,
+        1 => ScaleAdaptation::AspectRatioFit,
+        2 => ScaleAdaptation::Stretch,
+        _ => ScaleAdaptation::Original100,
+    };
+    let mut current_display = 1u8; // Pantalla 1 por defecto
     let mut show_toolbar = true;
+
+    // Notificar al Host las preferencias de calidad y límite de ancho de banda iniciales
+    let _ = control_tx.send(ControlEvent::SetQuality { quality: initial_quality });
+    if initial_fps_limit > 0 {
+        let _ = control_tx.send(ControlEvent::SetFpsLimit { fps: initial_fps_limit });
+    }
 
     println!("\n============================================================");
     println!(" 🐺 [VISOR WOLFDESK HD - RENDIMIENTO TOTAL]");
@@ -624,14 +752,15 @@ pub fn start_viewer_window(
         }
 
         // 8. Botones de la barra superior (Coordenadas cliente exactas)
-        let btn_calidad_rect = (10, 6, 185, 26);
-        let btn_escala_rect = (202, 6, 155, 26);
-        let btn_grabar_rect = (364, 6, 120, 26);
-        let btn_archivos_rect = (491, 6, 95, 26);
-        let btn_modo_rect = (593, 6, 125, 26);
-        let btn_win_rect = (725, 6, 80, 26);
-        let btn_ocultar_rect = (812, 6, 80, 26);
-        let btn_salir_rect = (899, 6, 75, 26);
+        let btn_pantalla_rect = (10, 6, 120, 26);
+        let btn_calidad_rect = (136, 6, 175, 26);
+        let btn_escala_rect = (317, 6, 145, 26);
+        let btn_grabar_rect = (468, 6, 115, 26);
+        let btn_archivos_rect = (589, 6, 95, 26);
+        let btn_modo_rect = (690, 6, 115, 26);
+        let btn_win_rect = (811, 6, 80, 26);
+        let btn_ocultar_rect = (897, 6, 75, 26);
+        let btn_salir_rect = (978, 6, 70, 26);
         let btn_mostrar_rect = (10, 4, 85, 26);
 
         let is_in = |rect: (usize, usize, usize, usize)| {
@@ -673,7 +802,10 @@ pub fn start_viewer_window(
 
         if left_just_pressed {
             if show_toolbar && is_over_toolbar {
-                if is_in(btn_calidad_rect) {
+                if is_in(btn_pantalla_rect) {
+                    current_display = (current_display + 1) % 4; // 1 -> 2 -> 3 -> 0 (Todas) -> 1
+                    let _ = control_tx.send(ControlEvent::SelectDisplay { display_id: current_display });
+                } else if is_in(btn_calidad_rect) {
                     quality_tier = (quality_tier + 1) % 4;
                     let (q, lbl) = match quality_tier {
                         0 => (40, "Rápida (40%)"),
@@ -799,6 +931,13 @@ pub fn start_viewer_window(
                 buffer[line_y * client_w..(line_y + 1) * client_w].fill(0x00E5FF);
             }
 
+            let pant_label = if current_display == 0 {
+                "Pant: Todas".to_string()
+            } else {
+                format!("Pantalla: {}", current_display)
+            };
+            draw_button(&mut buffer, client_w, client_h, btn_pantalla_rect, &pant_label, is_in(btn_pantalla_rect), false, 0x0284C7);
+
             let cal_label = format!("Calidad: {}", current_quality_label);
             draw_button(&mut buffer, client_w, client_h, btn_calidad_rect, &cal_label, is_in(btn_calidad_rect), false, 0);
 
@@ -839,33 +978,40 @@ pub fn start_viewer_window(
             draw_button(&mut buffer, client_w, client_h, (bx, by, bw, bh), &banner_txt, false, false, 0xF59E0B);
         }
 
-        // 11. Eventos de teclado con repetición continua (elimina continuamente al mantener pulsado Backspace)
-        let pressed_keys = window.get_keys_pressed(KeyRepeat::Yes);
-        for key in pressed_keys {
-            if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
-                continue;
-            }
-            if !is_view_only {
-                if let Some(vk_code) = minifb_key_to_vk(key) {
-                    let _ = control_tx.send(ControlEvent::Keyboard {
-                        vk_code,
-                        down: true,
-                    });
+        // 11. Eventos de teclado minifb (activo si el hook nativo no está disponible o en Linux)
+        #[cfg(windows)]
+        let need_minifb_keys = hook.is_none();
+        #[cfg(not(windows))]
+        let need_minifb_keys = true;
+
+        if need_minifb_keys {
+            let pressed_keys = window.get_keys_pressed(KeyRepeat::Yes);
+            for key in pressed_keys {
+                if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
+                    continue;
+                }
+                if !is_view_only {
+                    if let Some(vk_code) = minifb_key_to_vk(key) {
+                        let _ = control_tx.send(ControlEvent::Keyboard {
+                            vk_code,
+                            down: true,
+                        });
+                    }
                 }
             }
-        }
 
-        let released_keys = window.get_keys_released();
-        for key in released_keys {
-            if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
-                continue;
-            }
-            if !is_view_only {
-                if let Some(vk_code) = minifb_key_to_vk(key) {
-                    let _ = control_tx.send(ControlEvent::Keyboard {
-                        vk_code,
-                        down: false,
-                    });
+            let released_keys = window.get_keys_released();
+            for key in released_keys {
+                if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
+                    continue;
+                }
+                if !is_view_only {
+                    if let Some(vk_code) = minifb_key_to_vk(key) {
+                        let _ = control_tx.send(ControlEvent::Keyboard {
+                            vk_code,
+                            down: false,
+                        });
+                    }
                 }
             }
         }

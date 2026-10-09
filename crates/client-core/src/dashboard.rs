@@ -18,6 +18,9 @@ pub enum UiToNet {
         target_id: String,
         password: Option<String>,
         view_only: bool,
+        quality: u8,
+        scale_mode: u8,
+        fps_limit: u32,
     },
     AcceptIncoming {
         from_id: String,
@@ -94,6 +97,9 @@ pub struct DashboardApp {
     pub target_id_input: String,
     pub password_input: String,
     pub view_only_mode: bool,
+    pub pref_quality: u8,
+    pub pref_scale_mode: u8,
+    pub pref_fps_limit: u32,
     pub status_text: String,
     pub is_online: bool,
 
@@ -148,6 +154,9 @@ pub struct DashboardApp {
     pub saved_target_id: String,
     pub saved_password: Option<String>,
     pub saved_view_only: bool,
+    pub saved_quality: u8,
+    pub saved_scale_mode: u8,
+    pub saved_fps_limit: u32,
     pub remote_session_state: RemoteSessionState,
     pub last_tick: std::time::Instant,
 
@@ -164,7 +173,8 @@ impl DashboardApp {
         rx_from_net: Receiver<NetToUi>,
     ) -> Self {
         let server_url = config.server_url.clone();
-        let (local_path, local_entries) = crate::FileTransferManager::list_directory(".");
+        let home_dir = crate::FileTransferManager::get_user_home_dir();
+        let (local_path, local_entries) = crate::FileTransferManager::list_directory(&home_dir);
         let is_installed = crate::installer::is_installed();
         Self {
             my_id,
@@ -173,6 +183,12 @@ impl DashboardApp {
             target_id_input: String::new(),
             password_input: String::new(),
             view_only_mode: false,
+            pref_quality: 70,    // Equilibrada (70%) por defecto
+            pref_scale_mode: 0,  // Original (1:1) por defecto
+            pref_fps_limit: 0,   // Sin límite por defecto
+            saved_quality: 70,
+            saved_scale_mode: 0,
+            saved_fps_limit: 0,
             status_text: "Conectando al clúster WolfDesk...".to_string(),
             is_online: false,
             incoming_request_from: None,
@@ -183,7 +199,7 @@ impl DashboardApp {
             local_file_path: local_path,
             local_file_entries: local_entries,
             selected_local_file: None,
-            remote_file_path: ".".to_string(),
+            remote_file_path: "~".to_string(),
             remote_file_entries: Vec::new(),
             selected_remote_file: None,
             file_status_message: "Listo para transferir archivos.".to_string(),
@@ -236,6 +252,9 @@ impl eframe::App for DashboardApp {
                         target_id: target_id.clone(),
                         password: self.saved_password.clone(),
                         view_only: self.saved_view_only,
+                        quality: self.saved_quality,
+                        scale_mode: self.saved_scale_mode,
+                        fps_limit: self.saved_fps_limit,
                     });
                 } else {
                     let tid = target_id.clone();
@@ -334,6 +353,9 @@ impl eframe::App for DashboardApp {
                         target_id: target,
                         password: self.saved_password.clone(),
                         view_only: self.saved_view_only,
+                        quality: self.saved_quality,
+                        scale_mode: self.saved_scale_mode,
+                        fps_limit: self.saved_fps_limit,
                     });
                 }
                 NetToUi::SessionRejected(reason) => {
@@ -370,6 +392,9 @@ impl eframe::App for DashboardApp {
                                 target_id: tid,
                                 password: self.saved_password.clone(),
                                 view_only: self.saved_view_only,
+                                quality: self.saved_quality,
+                                scale_mode: self.saved_scale_mode,
+                                fps_limit: self.saved_fps_limit,
                             });
                         }
                         _ => {
@@ -622,6 +647,9 @@ impl DashboardApp {
                                         target_id: target_id.clone(),
                                         password: self.saved_password.clone(),
                                         view_only: self.saved_view_only,
+                                        quality: self.saved_quality,
+                                        scale_mode: self.saved_scale_mode,
+                                        fps_limit: self.saved_fps_limit,
                                     });
                                 }
                             });
@@ -677,6 +705,9 @@ impl DashboardApp {
                                         target_id: target_id.clone(),
                                         password: self.saved_password.clone(),
                                         view_only: self.saved_view_only,
+                                        quality: self.saved_quality,
+                                        scale_mode: self.saved_scale_mode,
+                                        fps_limit: self.saved_fps_limit,
                                     });
                                 }
                             });
@@ -759,7 +790,71 @@ impl DashboardApp {
                         .color(Color32::from_rgb(148, 163, 184)),
                 );
 
-                ui.add_space(12.0);
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new(
+                    RichText::new("⚙️ Opciones y Preferencias de Conexión")
+                        .strong()
+                        .color(Color32::from_rgb(0, 229, 255)),
+                )
+                .default_open(true)
+                .show(ui, |ui| {
+                    // 1. Calidad de imagen (predeterminada: Equilibrada 70%)
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Calidad de imagen:").strong());
+                        egui::ComboBox::from_id_source("pref_quality_combo")
+                            .selected_text(match self.pref_quality {
+                                40 => "Rápida (40%)",
+                                70 => "Equilibrada (70%) [Predeterminada]",
+                                88 => "HD Nativa (88%)",
+                                96 => "4K Ultra (96%)",
+                                _ => "Equilibrada (70%)",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.pref_quality, 70, "Equilibrada (70%) [Predeterminada]");
+                                ui.selectable_value(&mut self.pref_quality, 88, "HD Nativa (88%)");
+                                ui.selectable_value(&mut self.pref_quality, 96, "4K Ultra (96%)");
+                                ui.selectable_value(&mut self.pref_quality, 40, "Rápida (40%)");
+                            });
+                    });
+
+                    // 2. Escala de renderización de la pantalla (predeterminada: Original 1:1)
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Escala de pantalla:").strong());
+                        egui::ComboBox::from_id_source("pref_scale_combo")
+                            .selected_text(match self.pref_scale_mode {
+                                0 => "Original (1:1) [Predeterminada]",
+                                1 => "Ajustar proporción (16:9)",
+                                2 => "Estirar ventana (100%)",
+                                _ => "Original (1:1)",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.pref_scale_mode, 0, "Original (1:1) [Predeterminada]");
+                                ui.selectable_value(&mut self.pref_scale_mode, 1, "Ajustar proporción (16:9)");
+                                ui.selectable_value(&mut self.pref_scale_mode, 2, "Estirar ventana (100%)");
+                            });
+                    });
+
+                    // 3. Velocidad o límites de banda ancha (predeterminada: Sin límite)
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Límite de velocidad:").strong());
+                        egui::ComboBox::from_id_source("pref_fps_combo")
+                            .selected_text(match self.pref_fps_limit {
+                                0 => "Sin límite (~60 FPS / Fluidez total) [Predeterminada]",
+                                30 => "30 FPS (~1.5 MB/s)",
+                                15 => "15 FPS (~750 KB/s - Ahorro)",
+                                5 => "5 FPS (Bajo consumo)",
+                                _ => "Sin límite",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.pref_fps_limit, 0, "Sin límite (~60 FPS / Fluidez total) [Predeterminada]");
+                                ui.selectable_value(&mut self.pref_fps_limit, 30, "30 FPS (~1.5 MB/s)");
+                                ui.selectable_value(&mut self.pref_fps_limit, 15, "15 FPS (~750 KB/s - Ahorro)");
+                                ui.selectable_value(&mut self.pref_fps_limit, 5, "5 FPS (Bajo consumo)");
+                            });
+                    });
+                });
+
+                ui.add_space(10.0);
                 let btn_text = RichText::new("🚀 CONECTAR CON WOLFDESK").strong().size(14.0).color(Color32::WHITE);
                 let connect_btn = egui::Button::new(btn_text).fill(Color32::from_rgb(14, 116, 144));
 
@@ -774,11 +869,17 @@ impl DashboardApp {
                         self.saved_target_id = target.clone();
                         self.saved_password = pass.clone();
                         self.saved_view_only = self.view_only_mode;
+                        self.saved_quality = self.pref_quality;
+                        self.saved_scale_mode = self.pref_scale_mode;
+                        self.saved_fps_limit = self.pref_fps_limit;
                         self.remote_session_state = RemoteSessionState::Connecting { target_id: target.clone() };
                         let _ = self.tx_to_net.send(UiToNet::Connect {
                             target_id: target,
                             password: pass,
                             view_only: self.view_only_mode,
+                            quality: self.pref_quality,
+                            scale_mode: self.pref_scale_mode,
+                            fps_limit: self.pref_fps_limit,
                         });
                     }
                 }
@@ -1036,11 +1137,17 @@ impl DashboardApp {
                     self.saved_target_id = id.clone();
                     self.saved_password = pass.clone();
                     self.saved_view_only = self.view_only_mode;
+                    self.saved_quality = self.pref_quality;
+                    self.saved_scale_mode = self.pref_scale_mode;
+                    self.saved_fps_limit = self.pref_fps_limit;
                     self.remote_session_state = RemoteSessionState::Connecting { target_id: id.clone() };
                     let _ = self.tx_to_net.send(UiToNet::Connect {
                         target_id: id,
                         password: pass,
                         view_only: self.view_only_mode,
+                        quality: self.pref_quality,
+                        scale_mode: self.pref_scale_mode,
+                        fps_limit: self.pref_fps_limit,
                     });
                     self.active_tab = ActiveTab::Main;
                 }
@@ -1150,6 +1257,13 @@ impl DashboardApp {
                             self.local_file_entries = entries;
                             self.selected_local_file = None;
                         }
+                        if ui.button("🏠 Home").on_hover_text("Ir al directorio Home del usuario").clicked() {
+                            let home = crate::FileTransferManager::get_user_home_dir();
+                            let (canon, entries) = crate::FileTransferManager::list_directory(&home);
+                            self.local_file_path = canon;
+                            self.local_file_entries = entries;
+                            self.selected_local_file = None;
+                        }
                     });
                 });
 
@@ -1227,6 +1341,14 @@ impl DashboardApp {
                                 let _ = self.tx_to_net.send(UiToNet::RequestRemoteFiles {
                                     target_id: peer.clone(),
                                     path: parent,
+                                });
+                            }
+                        }
+                        if ui.button("🏠 Home").on_hover_text("Ir al directorio Home del usuario remoto").clicked() {
+                            if let Some(ref peer) = self.active_peer_id {
+                                let _ = self.tx_to_net.send(UiToNet::RequestRemoteFiles {
+                                    target_id: peer.clone(),
+                                    path: "~".to_string(),
                                 });
                             }
                         }

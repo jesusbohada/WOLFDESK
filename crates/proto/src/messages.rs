@@ -158,12 +158,22 @@ pub enum ControlEvent {
         vk_code: u16,
         down: bool,
     },
+    KeyboardUnicode {
+        text: String,
+    },
+    SelectDisplay {
+        display_id: u8,
+    },
     ClipboardSync {
         text: String,
     },
     /// Cambio dinámico de calidad de imagen (ej: 40 para velocidad, 90 para HD)
     SetQuality {
         quality: u8,
+    },
+    /// Límite dinámico de tasa de fotogramas (0 = sin límite)
+    SetFpsLimit {
+        fps: u32,
     },
     Ping {
         timestamp: u64,

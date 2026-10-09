@@ -12,12 +12,12 @@ pub mod tray;
 pub mod updater;
 pub mod viewer;
 
-pub use capture::{ScreenCapturer, ScreenFrame};
+pub use capture::{enumerate_monitors, MonitorBounds, ScreenCapturer, ScreenFrame};
 pub use config::{AppConfig, Contact};
 pub use dashboard::DashboardApp;
 pub use file_transfer::FileTransferManager;
 pub use identity_store::load_or_create_identity;
-pub use input::dispatch_event_with_permissions;
+pub use input::{dispatch_event_with_permissions, set_active_capture_bounds};
 pub use installer::{install_to_system, is_installed, uninstall_from_system};
 pub use recorder::SessionRecorder;
 pub use signaling_client::SignalingClient;

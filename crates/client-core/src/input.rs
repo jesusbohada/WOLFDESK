@@ -4,12 +4,43 @@ use proto::{ControlEvent, MouseButtonType, SessionPermissions};
 use windows::Win32::{
     UI::Input::KeyboardAndMouse::{
         MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
-        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAP_VIRTUAL_KEY_TYPE, MOUSEEVENTF_LEFTDOWN,
+        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAP_VIRTUAL_KEY_TYPE, MOUSEEVENTF_LEFTDOWN,
         MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_RIGHTDOWN,
         MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY,
     },
     UI::WindowsAndMessaging::{GetSystemMetrics, SetCursorPos, SM_CXSCREEN, SM_CYSCREEN},
 };
+
+static ACTIVE_CAPTURE_BOUNDS: std::sync::RwLock<Option<(i32, i32, i32, i32)>> = std::sync::RwLock::new(None);
+
+/// Define los límites y coordenadas de origen de la pantalla actualmente seleccionada para el mapeo del cursor
+pub fn set_active_capture_bounds(x: i32, y: i32, w: i32, h: i32) {
+    if let Ok(mut lock) = ACTIVE_CAPTURE_BOUNDS.write() {
+        *lock = Some((x, y, w, h));
+    }
+}
+
+/// Obtiene los límites activos o las dimensiones de la pantalla principal
+fn get_active_bounds() -> (i32, i32, i32, i32) {
+    if let Ok(lock) = ACTIVE_CAPTURE_BOUNDS.read() {
+        if let Some((ox, oy, bw, bh)) = *lock {
+            return (ox, oy, bw, bh);
+        }
+    }
+    #[cfg(windows)]
+    unsafe {
+        let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(windows::Win32::Foundation::HWND(0));
+        let phys_w = windows::Win32::Graphics::Gdi::GetDeviceCaps(hdc_screen, windows::Win32::Graphics::Gdi::GET_DEVICE_CAPS_INDEX(118));
+        let phys_h = windows::Win32::Graphics::Gdi::GetDeviceCaps(hdc_screen, windows::Win32::Graphics::Gdi::GET_DEVICE_CAPS_INDEX(117));
+        let _ = windows::Win32::Graphics::Gdi::ReleaseDC(windows::Win32::Foundation::HWND(0), hdc_screen);
+
+        let sw = if phys_w > 0 { phys_w } else { GetSystemMetrics(SM_CXSCREEN) };
+        let sh = if phys_h > 0 { phys_h } else { GetSystemMetrics(SM_CYSCREEN) };
+        (0, 0, sw, sh)
+    }
+    #[cfg(not(windows))]
+    (0, 0, 1920, 1080)
+}
 
 /// Procesa un evento de control remoto verificando los permisos de seguridad concedidos por el Host
 pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &SessionPermissions) {
@@ -20,16 +51,9 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
                 return;
             }
             unsafe {
-                let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(windows::Win32::Foundation::HWND(0));
-                let phys_w = windows::Win32::Graphics::Gdi::GetDeviceCaps(hdc_screen, windows::Win32::Graphics::Gdi::GET_DEVICE_CAPS_INDEX(118));
-                let phys_h = windows::Win32::Graphics::Gdi::GetDeviceCaps(hdc_screen, windows::Win32::Graphics::Gdi::GET_DEVICE_CAPS_INDEX(117));
-                let _ = windows::Win32::Graphics::Gdi::ReleaseDC(windows::Win32::Foundation::HWND(0), hdc_screen);
-
-                let screen_w = if phys_w > 0 { phys_w } else { GetSystemMetrics(SM_CXSCREEN) };
-                let screen_h = if phys_h > 0 { phys_h } else { GetSystemMetrics(SM_CYSCREEN) };
-
-                let target_x = (x.clamp(0.0, 1.0) * (screen_w - 1) as f32).round() as i32;
-                let target_y = (y.clamp(0.0, 1.0) * (screen_h - 1) as f32).round() as i32;
+                let (origin_x, origin_y, bounds_w, bounds_h) = get_active_bounds();
+                let target_x = origin_x + (x.clamp(0.0, 1.0) * (bounds_w - 1) as f32).round() as i32;
+                let target_y = origin_y + (y.clamp(0.0, 1.0) * (bounds_h - 1) as f32).round() as i32;
                 let _ = SetCursorPos(target_x, target_y);
             }
         }
@@ -40,16 +64,9 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
             }
             unsafe {
                 if let (Some(px), Some(py)) = (x, y) {
-                    let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(windows::Win32::Foundation::HWND(0));
-                    let phys_w = windows::Win32::Graphics::Gdi::GetDeviceCaps(hdc_screen, windows::Win32::Graphics::Gdi::GET_DEVICE_CAPS_INDEX(118));
-                    let phys_h = windows::Win32::Graphics::Gdi::GetDeviceCaps(hdc_screen, windows::Win32::Graphics::Gdi::GET_DEVICE_CAPS_INDEX(117));
-                    let _ = windows::Win32::Graphics::Gdi::ReleaseDC(windows::Win32::Foundation::HWND(0), hdc_screen);
-
-                    let screen_w = if phys_w > 0 { phys_w } else { GetSystemMetrics(SM_CXSCREEN) };
-                    let screen_h = if phys_h > 0 { phys_h } else { GetSystemMetrics(SM_CYSCREEN) };
-
-                    let target_x = (px.clamp(0.0, 1.0) * (screen_w - 1) as f32).round() as i32;
-                    let target_y = (py.clamp(0.0, 1.0) * (screen_h - 1) as f32).round() as i32;
+                    let (origin_x, origin_y, bounds_w, bounds_h) = get_active_bounds();
+                    let target_x = origin_x + (px.clamp(0.0, 1.0) * (bounds_w - 1) as f32).round() as i32;
+                    let target_y = origin_y + (py.clamp(0.0, 1.0) * (bounds_h - 1) as f32).round() as i32;
                     let _ = SetCursorPos(target_x, target_y);
                 }
 
@@ -183,6 +200,44 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
             }
         }
 
+        ControlEvent::KeyboardUnicode { text } => {
+            if !permissions.allow_keyboard {
+                return;
+            }
+            #[cfg(windows)]
+            unsafe {
+                for ch in text.encode_utf16() {
+                    let inputs = [
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: VIRTUAL_KEY(0),
+                                    wScan: ch,
+                                    dwFlags: KEYEVENTF_UNICODE,
+                                    time: 0,
+                                    dwExtraInfo: 0,
+                                },
+                            },
+                        },
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: VIRTUAL_KEY(0),
+                                    wScan: ch,
+                                    dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                                    time: 0,
+                                    dwExtraInfo: 0,
+                                },
+                            },
+                        },
+                    ];
+                    SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                }
+            }
+        }
+
         ControlEvent::ClipboardSync { text } => {
             if !permissions.allow_clipboard {
                 return;
@@ -190,7 +245,11 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
             log::info!("Sincronización de portapapeles autorizada: {} caracteres", text.len());
         }
 
-        ControlEvent::SetQuality { .. } | ControlEvent::Ping { .. } | ControlEvent::Pong { .. } => {}
+        ControlEvent::SelectDisplay { .. }
+        | ControlEvent::SetFpsLimit { .. }
+        | ControlEvent::SetQuality { .. }
+        | ControlEvent::Ping { .. }
+        | ControlEvent::Pong { .. } => {}
     }
 
     #[cfg(target_os = "linux")]

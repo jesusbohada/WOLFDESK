@@ -189,6 +189,15 @@ fn main() -> Result<(), eframe::Error> {
     let last_frame_received: Arc<RwLock<Option<std::time::Instant>>> = Arc::new(RwLock::new(None));
     let active_view_only: Arc<RwLock<bool>> = Arc::new(RwLock::new(false));
 
+    // Preferencias del cliente al conectarse
+    let active_client_quality: Arc<RwLock<u8>> = Arc::new(RwLock::new(70));
+    let active_client_scale_mode: Arc<RwLock<u8>> = Arc::new(RwLock::new(0));
+    let active_client_fps_limit: Arc<RwLock<u32>> = Arc::new(RwLock::new(0));
+
+    // Configuración activa del Host (pantalla seleccionada y límite de framerate)
+    let active_host_display: Arc<RwLock<u8>> = Arc::new(RwLock::new(0));
+    let active_host_fps_limit: Arc<RwLock<u32>> = Arc::new(RwLock::new(0));
+
     // Gestor de transferencia de archivos
     let file_manager: Arc<Mutex<FileTransferManager>> = Arc::new(Mutex::new(FileTransferManager::new()));
 
@@ -224,21 +233,47 @@ fn main() -> Result<(), eframe::Error> {
             let active_controller_for_capture = active_controller_id.clone();
             let tx_for_capture = outbound_tx.clone();
             let quality_for_capture = active_streaming_quality.clone();
+            let display_for_capture = active_host_display.clone();
+            let fps_limit_for_capture = active_host_fps_limit.clone();
 
             tokio::spawn(async move {
                 use base64::Engine;
                 let mut capturer = ScreenCapturer::new();
 
                 loop {
-                    sleep(Duration::from_millis(60)).await; // ~16 FPS (fluido, baja latencia y consumo óptimo)
+                    // Control dinámico de framerate / ancho de banda
+                    let fps_lim = *fps_limit_for_capture.read().await;
+                    let sleep_ms = match fps_lim {
+                        5 => 200,   // ~5 FPS (Bajo consumo)
+                        15 => 66,   // ~15 FPS (~750 KB/s)
+                        30 => 33,   // ~30 FPS (~1.5 MB/s)
+                        _ => 16,    // ~60 FPS (Sin límite / fluidez total)
+                    };
+                    sleep(Duration::from_millis(sleep_ms)).await;
+
                     let maybe_controller = active_controller_for_capture.read().await.clone();
                     if let Some(target) = maybe_controller {
+                        // Sincronizar selección de pantalla en el Host
+                        let desired_display = *display_for_capture.read().await;
+                        if capturer.selected_display != desired_display {
+                            capturer.set_display(desired_display);
+                            #[cfg(windows)]
+                            {
+                                client_core::set_active_capture_bounds(
+                                    capturer.capture_x,
+                                    capturer.capture_y,
+                                    capturer.screen_w,
+                                    capturer.screen_h,
+                                );
+                            }
+                        }
+
                         let current_q = *quality_for_capture.read().await;
                         match capturer.capture_frame(current_q) {
                             Some(frame) => {
                                 static LOGGED_STREAM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
                                 if !LOGGED_STREAM.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                                    log::info!("🚀 [HOST STREAMING] Transmitiendo escritorio en vivo a [{}] ({}x{})", target, frame.width, frame.height);
+                                    log::info!("🚀 [HOST STREAMING] Transmitiendo escritorio en vivo a [{}] ({}x{}, Pantalla {})", target, frame.width, frame.height, capturer.selected_display);
                                 }
                                 let base64_str = base64::engine::general_purpose::STANDARD.encode(&frame.jpeg_bytes);
                                 let _ = tx_for_capture.send(SignalMessage::VideoFrame {
@@ -297,12 +332,18 @@ fn main() -> Result<(), eframe::Error> {
             let shared_cfg_for_ui = shared_config.clone();
             let tx_ui_notify_cmd = tx_to_ui.clone();
             let active_view_only_for_ui = active_view_only.clone();
+            let active_client_quality_for_ui = active_client_quality.clone();
+            let active_client_scale_for_ui = active_client_scale_mode.clone();
+            let active_client_fps_for_ui = active_client_fps_limit.clone();
 
             tokio::spawn(async move {
                 while let Some(cmd) = rx_from_ui.recv().await {
                     match cmd {
-                        UiToNet::Connect { target_id, password, view_only } => {
+                        UiToNet::Connect { target_id, password, view_only, quality, scale_mode, fps_limit } => {
                             *active_view_only_for_ui.write().await = view_only;
+                            *active_client_quality_for_ui.write().await = quality;
+                            *active_client_scale_for_ui.write().await = scale_mode;
+                            *active_client_fps_for_ui.write().await = fps_limit;
                             *target_for_ui.write().await = Some(target_id.clone());
                             let password_hash = password.map(|p| {
                                 use sha2::{Digest, Sha256};
@@ -474,8 +515,13 @@ fn main() -> Result<(), eframe::Error> {
             let viewer_tx_clone = viewer_frame_tx.clone();
             let viewer_ctrl_tx_clone = viewer_control_tx.clone();
             let quality_on_host = active_streaming_quality.clone();
+            let display_on_host = active_host_display.clone();
+            let fps_limit_on_host = active_host_fps_limit.clone();
             let file_manager_clone = file_manager.clone();
             let active_view_only_for_accept = active_view_only.clone();
+            let active_client_quality_for_accept = active_client_quality.clone();
+            let active_client_scale_for_accept = active_client_scale_mode.clone();
+            let active_client_fps_for_accept = active_client_fps_limit.clone();
 
             while let Some(msg) = inbound_rx.recv().await {
                 match msg {
@@ -517,6 +563,10 @@ fn main() -> Result<(), eframe::Error> {
                             *viewer_tx_clone.lock().unwrap() = Some(f_tx);
 
                             let is_view_only = *active_view_only_for_accept.read().await;
+                            let init_q = *active_client_quality_for_accept.read().await;
+                            let init_scale = *active_client_scale_for_accept.read().await;
+                            let init_fps = *active_client_fps_for_accept.read().await;
+
                             let title = if is_view_only {
                                 format!("🐺 WolfDesk - Sesión con [{}] [👁️ ESPECTADOR]", from_id)
                             } else {
@@ -525,7 +575,7 @@ fn main() -> Result<(), eframe::Error> {
                             let ctrl_tx = viewer_ctrl_tx_clone.clone();
                             let ui_tx = tx_ui_notify.clone();
                             std::thread::spawn(move || {
-                                start_viewer_window(&title, f_rx, ctrl_tx, ui_tx, is_view_only);
+                                start_viewer_window(&title, f_rx, ctrl_tx, ui_tx, is_view_only, init_q, init_scale, init_fps);
                             });
                         } else {
                             log::info!("🐺 [RECONECTADO] El visor ya está abierto para [{}]. Reanudando fotogramas...", from_id);
@@ -556,7 +606,12 @@ fn main() -> Result<(), eframe::Error> {
                     }
 
                     SignalMessage::FileListRequest { target_id, path } => {
-                        let (canon_path, entries) = FileTransferManager::list_directory(&path);
+                        let actual_path = if path.is_empty() || path == "~" || path == "HOME" {
+                            FileTransferManager::get_user_home_dir()
+                        } else {
+                            path
+                        };
+                        let (canon_path, entries) = FileTransferManager::list_directory(&actual_path);
                         let _ = outbound_auto_accept.send(SignalMessage::FileListResponse {
                             target_id,
                             path: canon_path,
@@ -606,6 +661,14 @@ fn main() -> Result<(), eframe::Error> {
                             ControlEvent::SetQuality { quality } => {
                                 *quality_on_host.write().await = *quality;
                                 println!(">> [WOLFDESK HOST] Calidad de captura ajustada dinámicamente a {}%", quality);
+                            }
+                            ControlEvent::SelectDisplay { display_id } => {
+                                *display_on_host.write().await = *display_id;
+                                println!(">> [WOLFDESK HOST] Monitor activo para streaming seleccionado: Pantalla {}", display_id);
+                            }
+                            ControlEvent::SetFpsLimit { fps } => {
+                                *fps_limit_on_host.write().await = *fps;
+                                println!(">> [WOLFDESK HOST] Límite de FPS ajustado a {}", fps);
                             }
                             _ => {
                                 static LOG_CTRL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

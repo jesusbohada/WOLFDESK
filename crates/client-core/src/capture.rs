@@ -2,20 +2,146 @@ use std::io::Cursor;
 
 #[cfg(windows)]
 use windows::Win32::{
-    Foundation::HWND,
+    Foundation::{BOOL, HWND, LPARAM, RECT},
     Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-        GetDC, GetDIBits, ReleaseDC, SelectObject, SetStretchBltMode, StretchBlt,
-        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-        HBITMAP, HDC, RGBQUAD, SRCCOPY,
+        EnumDisplayMonitors, GetDC, GetDIBits, GetMonitorInfoW, ReleaseDC, SelectObject,
+        SetStretchBltMode, StretchBlt, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        HBITMAP, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW, RGBQUAD, SRCCOPY,
     },
-    UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN},
+    UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN,
+        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    },
 };
 
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection;
 #[cfg(target_os = "linux")]
 use x11rb::protocol::xproto::{ConnectionExt as XProtoExt, ImageFormat};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MonitorBounds {
+    pub id: u8,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub is_primary: bool,
+}
+
+#[cfg(windows)]
+pub fn enumerate_monitors() -> Vec<MonitorBounds> {
+    unsafe extern "system" fn enum_proc(
+        hmon: HMONITOR,
+        _hdc: HDC,
+        _rect: *mut RECT,
+        lparam: LPARAM,
+    ) -> BOOL {
+        let list = &mut *(lparam.0 as *mut Vec<MonitorBounds>);
+        let mut minfo = MONITORINFOEXW::default();
+        minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(hmon, &mut minfo as *mut _ as *mut MONITORINFO).as_bool() {
+            let rc = minfo.monitorInfo.rcMonitor;
+            let is_primary = (minfo.monitorInfo.dwFlags & 1) != 0;
+            let id = (list.len() + 1) as u8;
+            let w = rc.right - rc.left;
+            let h = rc.bottom - rc.top;
+            if w > 0 && h > 0 {
+                let name = if is_primary {
+                    format!("Pantalla {} (Principal)", id)
+                } else {
+                    format!("Pantalla {}", id)
+                };
+                list.push(MonitorBounds {
+                    id,
+                    name,
+                    x: rc.left,
+                    y: rc.top,
+                    width: w,
+                    height: h,
+                    is_primary,
+                });
+            }
+        }
+        BOOL(1)
+    }
+
+    let mut monitors = Vec::new();
+    unsafe {
+        let _ = EnumDisplayMonitors(
+            HDC(0),
+            None,
+            Some(enum_proc),
+            LPARAM(&mut monitors as *mut _ as isize),
+        );
+    }
+    if monitors.is_empty() {
+        let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        monitors.push(MonitorBounds {
+            id: 1,
+            name: "Pantalla 1 (Principal)".to_string(),
+            x: 0,
+            y: 0,
+            width: if w > 0 { w } else { 1920 },
+            height: if h > 0 { h } else { 1080 },
+            is_primary: true,
+        });
+    }
+    monitors
+}
+
+#[cfg(target_os = "linux")]
+pub fn enumerate_monitors() -> Vec<MonitorBounds> {
+    ensure_linux_x11_auth();
+    let mut monitors = Vec::new();
+    if let Ok((conn, screen_num)) = x11rb::connect(None) {
+        let setup = conn.setup();
+        if let Some(screen) = setup.roots.get(screen_num) {
+            let mut w = screen.width_in_pixels as i32;
+            let mut h = screen.height_in_pixels as i32;
+            if let Ok(geom) = conn.get_geometry(screen.root).and_then(|c| c.reply()) {
+                w = geom.width as i32;
+                h = geom.height as i32;
+            }
+            monitors.push(MonitorBounds {
+                id: 1,
+                name: "Pantalla 1 (Principal)".to_string(),
+                x: 0,
+                y: 0,
+                width: w,
+                height: h,
+                is_primary: true,
+            });
+            return monitors;
+        }
+    }
+    monitors.push(MonitorBounds {
+        id: 1,
+        name: "Pantalla 1 (Principal)".to_string(),
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        is_primary: true,
+    });
+    monitors
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn enumerate_monitors() -> Vec<MonitorBounds> {
+    vec![MonitorBounds {
+        id: 1,
+        name: "Pantalla 1 (Principal)".to_string(),
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        is_primary: true,
+    }]
+}
 
 #[cfg(target_os = "linux")]
 pub fn ensure_linux_x11_auth() {
@@ -78,38 +204,74 @@ pub struct ScreenFrame {
     pub jpeg_bytes: Vec<u8>,
 }
 
-/// Capturador de pantalla optimizado multiplataforma (Windows GDI / Linux X11)
+/// Capturador de pantalla optimizado multiplataforma (Windows GDI / Linux X11) con soporte multi-monitor
 pub struct ScreenCapturer {
     pub screen_w: i32,
     pub screen_h: i32,
+    pub capture_x: i32,
+    pub capture_y: i32,
+    pub selected_display: u8,
+    pub monitors: Vec<MonitorBounds>,
 }
 
 impl ScreenCapturer {
     pub fn new() -> Self {
-        #[cfg(windows)]
-        unsafe {
-            let screen_w = GetSystemMetrics(SM_CXSCREEN);
-            let screen_h = GetSystemMetrics(SM_CYSCREEN);
-            Self { screen_w, screen_h }
-        }
+        let mut capturer = Self {
+            screen_w: 1920,
+            screen_h: 1080,
+            capture_x: 0,
+            capture_y: 0,
+            selected_display: 1, // Por defecto: Pantalla 1
+            monitors: Vec::new(),
+        };
+        capturer.update_bounds();
+        capturer
+    }
 
-        #[cfg(target_os = "linux")]
-        {
-            ensure_linux_x11_auth();
-            if let Ok((conn, screen_num)) = x11rb::connect(None) {
-                let setup = conn.setup();
-                if let Some(screen) = setup.roots.get(screen_num) {
-                    return Self {
-                        screen_w: screen.width_in_pixels as i32,
-                        screen_h: screen.height_in_pixels as i32,
-                    };
+    /// Cambia el monitor activo a capturar (0 = Todas las pantallas combinadas, 1..N = Pantalla específica)
+    pub fn set_display(&mut self, display_id: u8) {
+        self.selected_display = display_id;
+        self.update_bounds();
+    }
+
+    /// Actualiza la lista de monitores y calcula las dimensiones y desplazamientos exactos
+    pub fn update_bounds(&mut self) {
+        self.monitors = enumerate_monitors();
+        if self.selected_display == 0 {
+            // Modo "Todas las pantallas" (Virtual Screen)
+            #[cfg(windows)]
+            unsafe {
+                let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                if vw > 0 && vh > 0 {
+                    self.capture_x = vx;
+                    self.capture_y = vy;
+                    self.screen_w = vw;
+                    self.screen_h = vh;
+                    return;
                 }
             }
-            Self { screen_w: 1920, screen_h: 1080 }
+        } else if let Some(mon) = self.monitors.iter().find(|m| m.id == self.selected_display) {
+            self.capture_x = mon.x;
+            self.capture_y = mon.y;
+            self.screen_w = mon.width;
+            self.screen_h = mon.height;
+            return;
         }
 
-        #[cfg(not(any(windows, target_os = "linux")))]
-        Self { screen_w: 1920, screen_h: 1080 }
+        if let Some(first) = self.monitors.first() {
+            self.capture_x = first.x;
+            self.capture_y = first.y;
+            self.screen_w = first.width;
+            self.screen_h = first.height;
+        } else {
+            self.capture_x = 0;
+            self.capture_y = 0;
+            self.screen_w = 1920;
+            self.screen_h = 1080;
+        }
     }
 
     /// Captura un fotograma completo sin rotura de líneas (usando GetDIBits) y con escala adaptativa
@@ -117,12 +279,12 @@ impl ScreenCapturer {
         #[cfg(windows)]
         unsafe {
             let hdc_screen: HDC = GetDC(HWND(0));
-            let phys_w = windows::Win32::Graphics::Gdi::GetDeviceCaps(hdc_screen, windows::Win32::Graphics::Gdi::GET_DEVICE_CAPS_INDEX(118));
-            let phys_h = windows::Win32::Graphics::Gdi::GetDeviceCaps(hdc_screen, windows::Win32::Graphics::Gdi::GET_DEVICE_CAPS_INDEX(117));
-            self.screen_w = if phys_w > 0 { phys_w } else { GetSystemMetrics(SM_CXSCREEN) };
-            self.screen_h = if phys_h > 0 { phys_h } else { GetSystemMetrics(SM_CYSCREEN) };
+            let src_x = self.capture_x;
+            let src_y = self.capture_y;
+            let src_w = self.screen_w;
+            let src_h = self.screen_h;
 
-            if self.screen_w <= 0 || self.screen_h <= 0 {
+            if src_w <= 0 || src_h <= 0 {
                 ReleaseDC(HWND(0), hdc_screen);
                 return None;
             }
@@ -130,26 +292,26 @@ impl ScreenCapturer {
             // Solo reducir resolución si se selecciona modo de bajísimo consumo (F1 <= 45).
             // Para todos los demás modos (F2 70%, F3 88%, F4 96%): 100% NATIVO SIN DOWNSCALING
             let (target_w, target_h) = if quality <= 45 {
-                let max_w = 1280.min(self.screen_w);
-                let max_h = (max_w as f32 * (self.screen_h as f32 / self.screen_w as f32)) as i32;
+                let max_w = 1280.min(src_w);
+                let max_h = (max_w as f32 * (src_h as f32 / src_w as f32)) as i32;
                 (max_w, max_h)
             } else {
-                (self.screen_w, self.screen_h)
+                (src_w, src_h)
             };
 
             let hdc_mem: HDC = CreateCompatibleDC(hdc_screen);
             let hbitmap: HBITMAP = CreateCompatibleBitmap(hdc_screen, target_w, target_h);
             let old_obj = SelectObject(hdc_mem, hbitmap);
 
-            // Escala por hardware en GPU/GDI mediante StretchBlt o BitBlt directo
-            if target_w == self.screen_w && target_h == self.screen_h {
-                let _ = BitBlt(hdc_mem, 0, 0, target_w, target_h, hdc_screen, 0, 0, SRCCOPY);
+            // Escala por hardware en GPU/GDI mediante StretchBlt o BitBlt directo con origen multi-monitor
+            if target_w == src_w && target_h == src_h {
+                let _ = BitBlt(hdc_mem, 0, 0, target_w, target_h, hdc_screen, src_x, src_y, SRCCOPY);
             } else {
                 let _ = SetStretchBltMode(hdc_mem, windows::Win32::Graphics::Gdi::HALFTONE);
                 let _ = windows::Win32::Graphics::Gdi::SetBrushOrgEx(hdc_mem, 0, 0, None);
                 let _ = StretchBlt(
                     hdc_mem, 0, 0, target_w, target_h,
-                    hdc_screen, 0, 0, self.screen_w, self.screen_h,
+                    hdc_screen, src_x, src_y, src_w, src_h,
                     SRCCOPY,
                 );
             }
