@@ -45,6 +45,22 @@ fn main() -> Result<(), eframe::Error> {
         return Ok(());
     }
 
+    // Limpieza de binarios antiguos de actualizaciones previas (.old / .old_*)
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                        if file_name.starts_with("wolfdesk.exe.old") || file_name.starts_with("wolfdesk.old") {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Instancia única: si WolfDesk ya está activo en segundo plano, solicitar mostrar la ventana y salir
     let single_instance_port = 19059;
     if let Ok(socket) = std::net::UdpSocket::bind("127.0.0.1:0") {

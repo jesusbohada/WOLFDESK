@@ -279,6 +279,19 @@ where
         return Err(format!("Error al ejecutar git pull: {}", e));
     }
 
+    // En Windows, si el ejecutable actual está activo en memoria, el kernel bloquea sobrescribirlo (error 5).
+    // Sin embargo, Windows SÍ permite renombrarlo a otro nombre en el mismo directorio para liberar la ruta.
+    #[cfg(windows)]
+    {
+        let target_exe = repo_dir.join("target/release/wolfdesk.exe");
+        if target_exe.exists() {
+            let pid = std::process::id();
+            let old_exe = repo_dir.join(format!("target/release/wolfdesk.exe.old_{}", pid));
+            let _ = std::fs::remove_file(&old_exe);
+            let _ = std::fs::rename(&target_exe, &old_exe);
+        }
+    }
+
     report_step("Compilando nueva versión optimizada con Cargo (Release)...");
     let cargo_bin = find_cargo_executable();
     let cargo_res = Command::new(&cargo_bin)
@@ -324,16 +337,23 @@ where
 
     #[cfg(windows)]
     {
+        let pid = std::process::id();
         if let Ok(prog_files) = std::env::var("ProgramFiles") {
             let dest = PathBuf::from(prog_files).join("WolfDesk").join(exe_name);
             if dest.exists() {
-                let _ = std::fs::copy(&new_binary, dest);
+                let old_dest = dest.with_file_name(format!("wolfdesk.exe.old_{}", pid));
+                let _ = std::fs::remove_file(&old_dest);
+                let _ = std::fs::rename(&dest, &old_dest);
+                let _ = std::fs::copy(&new_binary, &dest);
             }
         }
         if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
             let dest = PathBuf::from(local_appdata).join("Programs/WolfDesk").join(exe_name);
             if dest.exists() {
-                let _ = std::fs::copy(&new_binary, dest);
+                let old_dest = dest.with_file_name(format!("wolfdesk.exe.old_{}", pid));
+                let _ = std::fs::remove_file(&old_dest);
+                let _ = std::fs::rename(&dest, &old_dest);
+                let _ = std::fs::copy(&new_binary, &dest);
             }
         }
     }
