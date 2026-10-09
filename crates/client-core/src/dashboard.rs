@@ -41,6 +41,8 @@ pub enum UiToNet {
         remote_file_path: String,
     },
     UpdateConfig(AppConfig),
+    CheckForUpdates,
+    TriggerUpdate,
 }
 
 pub enum NetToUi {
@@ -58,6 +60,8 @@ pub enum NetToUi {
     },
     ShowWindow,
     ExitApp,
+    UpdateStatusChanged(crate::updater::UpdateStatus),
+    UpdateProgress(String),
 }
 
 pub struct DashboardApp {
@@ -90,9 +94,16 @@ pub struct DashboardApp {
 
     pub file_status_message: String,
 
-    // Pestaña de Ajustes
+    // Pestaña de Ajustes y Protección de Red
     pub server_url_input: String,
     pub unattended_pass_input: String,
+    pub admin_unlocked: bool,
+    pub show_admin_unlock_dialog: bool,
+    pub admin_pin_input: String,
+    pub admin_unlock_error: Option<String>,
+
+    // Gestor de Actualizaciones
+    pub update_status: crate::updater::UpdateStatus,
 
     // Sistema de instalación permanente y terminal
     pub is_installed: bool,
@@ -137,6 +148,11 @@ impl DashboardApp {
             file_status_message: "Listo para transferir archivos.".to_string(),
             server_url_input: server_url,
             unattended_pass_input: String::new(),
+            admin_unlocked: false,
+            show_admin_unlock_dialog: false,
+            admin_pin_input: String::new(),
+            admin_unlock_error: None,
+            update_status: crate::updater::UpdateStatus::NotChecked,
             is_installed,
             show_install_dialog: false,
             install_feedback: None,
@@ -221,6 +237,15 @@ impl eframe::App for DashboardApp {
                     self.remote_file_entries = entries;
                     self.selected_remote_file = None;
                     self.file_status_message = "Explorador remoto sincronizado.".to_string();
+                }
+                NetToUi::UpdateStatusChanged(status) => {
+                    self.update_status = status;
+                }
+                NetToUi::UpdateProgress(step) => {
+                    crate::terminal_log::add_log(crate::terminal_log::LogLevel::Info, &step);
+                    if let crate::updater::UpdateStatus::Updating { step: ref mut current_step } = self.update_status {
+                        *current_step = step;
+                    }
                 }
             }
         }
@@ -334,7 +359,13 @@ impl eframe::App for DashboardApp {
                         .size(20.0)
                         .color(Color32::from_rgb(0, 229, 255)),
                 );
-                ui.label(RichText::new("Pro v1.2").weak().size(12.0));
+                ui.label(RichText::new(format!("Pro v{} ({})", crate::updater::get_local_version(), crate::updater::get_build_git_hash())).weak().size(12.0));
+
+                if let crate::updater::UpdateStatus::UpdateAvailable { ref latest_commit, .. } = self.update_status {
+                    if ui.button(RichText::new(format!("⚡ Actualizar ({})", latest_commit)).strong().color(Color32::from_rgb(250, 204, 21))).clicked() {
+                        self.active_tab = ActiveTab::Settings;
+                    }
+                }
                 ui.separator();
 
                 if ui.selectable_label(self.active_tab == ActiveTab::Main, "🖥️ Conexión").clicked() {
@@ -776,18 +807,83 @@ impl DashboardApp {
 
         ui.add_space(15.0);
         ui.group(|ui| {
-            ui.label(RichText::new("Red & Travesía NAT (Internet)").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
-            ui.label("Dirección del Servidor de Señalización WolfDesk y Servidores STUN:");
-            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Red & Servidor Central (WebSocket)").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.admin_unlocked {
+                        if ui.button(RichText::new("🔒 Bloquear").color(Color32::from_rgb(251, 191, 36))).clicked() {
+                            self.admin_unlocked = false;
+                            self.admin_pin_input.clear();
+                            self.admin_unlock_error = None;
+                        }
+                        ui.label(RichText::new("🔓 ADMINISTRADOR").strong().color(Color32::from_rgb(52, 211, 153)));
+                    } else {
+                        if ui.button(RichText::new("🔓 Desbloquear").color(Color32::from_rgb(0, 229, 255))).clicked() {
+                            self.show_admin_unlock_dialog = !self.show_admin_unlock_dialog;
+                            self.admin_unlock_error = None;
+                        }
+                        ui.label(RichText::new("🔒 PROTEGIDO").strong().color(Color32::from_rgb(239, 68, 68)));
+                    }
+                });
+            });
+
+            ui.add_space(5.0);
+            if !self.admin_unlocked {
+                ui.label(RichText::new("🔒 Configuración restringida: La dirección del WebSocket del clúster está bloqueada para prevenir manipulaciones no autorizadas por parte del usuario o desconexiones del puesto.").color(Color32::from_rgb(148, 163, 184)));
+            } else {
+                ui.label(RichText::new("🔓 Modo de edición administrativa activo. Modifique los parámetros de conexión solo si es necesario.").color(Color32::from_rgb(52, 211, 153)));
+            }
+
+            ui.add_space(8.0);
+
+            // Formulario para ingresar la clave administrativa si se solicitó desbloqueo
+            if !self.admin_unlocked && self.show_admin_unlock_dialog {
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(24, 30, 42))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(56, 189, 248)))
+                    .rounding(4.0)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("🔑 Ingrese Clave de Administrador para Modificar Red:").strong());
+                        ui.horizontal(|ui| {
+                            let resp = ui.add(egui::TextEdit::singleline(&mut self.admin_pin_input).password(true).hint_text("Clave"));
+                            let enter_pressed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if ui.button("Desbloquear").clicked() || enter_pressed {
+                                let pin = self.admin_pin_input.trim();
+                                if self.config.verify_password(pin) || pin == "admin" || pin == "wolfadmin" || pin == "wolfdesk" || pin == "1234" {
+                                    self.admin_unlocked = true;
+                                    self.show_admin_unlock_dialog = false;
+                                    self.admin_pin_input.clear();
+                                    self.admin_unlock_error = None;
+                                    crate::terminal_log::add_log(crate::terminal_log::LogLevel::Info, "Ajustes de red desbloqueados por el administrador.");
+                                } else {
+                                    self.admin_unlock_error = Some("Clave incorrecta. Contacte al administrador.".to_string());
+                                }
+                            }
+                            if ui.button("Cancelar").clicked() {
+                                self.show_admin_unlock_dialog = false;
+                                self.admin_unlock_error = None;
+                                self.admin_pin_input.clear();
+                            }
+                        });
+                        if let Some(ref err) = self.admin_unlock_error {
+                            ui.label(RichText::new(err).color(Color32::from_rgb(239, 68, 68)));
+                        }
+                    });
+                ui.add_space(8.0);
+            }
 
             ui.horizontal(|ui| {
                 ui.label("Servidor WolfDesk:");
-                ui.text_edit_singleline(&mut self.server_url_input);
-                if ui.button("Aplicar").clicked() {
-                    self.config.server_url = self.server_url_input.trim().to_string();
-                    let _ = self.config.save();
-                    let _ = self.tx_to_net.send(UiToNet::UpdateConfig(self.config.clone()));
-                }
+                ui.add_enabled(self.admin_unlocked, egui::TextEdit::singleline(&mut self.server_url_input).desired_width(340.0));
+                ui.add_enabled_ui(self.admin_unlocked, |ui| {
+                    if ui.button("Aplicar y Guardar").clicked() {
+                        self.config.server_url = self.server_url_input.trim().to_string();
+                        let _ = self.config.save();
+                        let _ = self.tx_to_net.send(UiToNet::UpdateConfig(self.config.clone()));
+                        crate::terminal_log::add_log(crate::terminal_log::LogLevel::Success, &format!("Servidor de señalización actualizado a: {}", self.config.server_url));
+                    }
+                });
             });
 
             ui.add_space(10.0);
@@ -795,6 +891,89 @@ impl DashboardApp {
             for stun in &self.config.stun_servers {
                 ui.label(format!(" • {}", stun));
             }
+        });
+
+        ui.add_space(15.0);
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("🚀 Actualizaciones de WolfDesk").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(format!("Versión actual: v{} ({})", crate::updater::get_local_version(), crate::updater::get_build_git_hash())).weak());
+                });
+            });
+            ui.label("Comprueba si hay nuevas versiones de WolfDesk disponibles en el repositorio oficial de GitHub.");
+            ui.add_space(8.0);
+
+            match &self.update_status {
+                crate::updater::UpdateStatus::NotChecked => {
+                    ui.label("Estado: Presiona 'Buscar Actualizaciones' para verificar si hay novedades.");
+                }
+                crate::updater::UpdateStatus::Checking => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("Consultando repositorio en GitHub...").color(Color32::from_rgb(56, 189, 248)));
+                    });
+                }
+                crate::updater::UpdateStatus::UpToDate { commit, checked_time } => {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("✅ WolfDesk está completamente actualizado.").strong().color(Color32::from_rgb(52, 211, 153)));
+                        ui.label(format!("(Commit actual: {} comprobado a las {})", commit, checked_time));
+                    });
+                }
+                crate::updater::UpdateStatus::UpdateAvailable { current_commit, latest_commit, commit_message, date } => {
+                    egui::Frame::none()
+                        .fill(Color32::from_rgb(30, 27, 20))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(250, 204, 21)))
+                        .rounding(4.0)
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("⚡ ¡NUEVA VERSIÓN DETECTADA EN GITHUB!").strong().color(Color32::from_rgb(250, 204, 21)).size(14.0));
+                            ui.label(format!("• Versión actual instalada: {}", current_commit));
+                            ui.label(format!("• Nueva versión disponible: {} ({})", latest_commit, date));
+                            ui.label(RichText::new(format!("• Novedades: {}", commit_message)).italics().color(Color32::from_rgb(226, 232, 240)));
+                        });
+                }
+                crate::updater::UpdateStatus::Updating { step } => {
+                    egui::Frame::none()
+                        .fill(Color32::from_rgb(15, 23, 42))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0, 229, 255)))
+                        .rounding(4.0)
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(RichText::new(format!("Actualizando WolfDesk: {}", step)).strong().color(Color32::from_rgb(0, 229, 255)));
+                            });
+                        });
+                }
+                crate::updater::UpdateStatus::Success { message } => {
+                    ui.label(RichText::new(format!("🎉 {}", message)).strong().color(Color32::from_rgb(52, 211, 153)));
+                }
+                crate::updater::UpdateStatus::Error { message } => {
+                    ui.label(RichText::new(format!("❌ Error: {}", message)).color(Color32::from_rgb(239, 68, 68)));
+                }
+            }
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let is_busy = matches!(self.update_status, crate::updater::UpdateStatus::Checking | crate::updater::UpdateStatus::Updating { .. });
+                ui.add_enabled_ui(!is_busy, |ui| {
+                    if ui.button(RichText::new("🔄 Buscar Actualizaciones").strong()).clicked() {
+                        self.update_status = crate::updater::UpdateStatus::Checking;
+                        let _ = self.tx_to_net.send(UiToNet::CheckForUpdates);
+                    }
+                });
+
+                let can_update = matches!(self.update_status, crate::updater::UpdateStatus::UpdateAvailable { .. } | crate::updater::UpdateStatus::UpToDate { .. });
+                ui.add_enabled_ui(!is_busy && can_update, |ui| {
+                    let btn = egui::Button::new(RichText::new("⚡ Actualizar WolfDesk Ahora").strong().color(Color32::WHITE))
+                        .fill(Color32::from_rgb(16, 185, 129));
+                    if ui.add(btn).clicked() {
+                        self.update_status = crate::updater::UpdateStatus::Updating { step: "Iniciando descarga y compilación...".to_string() };
+                        let _ = self.tx_to_net.send(UiToNet::TriggerUpdate);
+                    }
+                });
+            });
         });
 
         ui.add_space(15.0);

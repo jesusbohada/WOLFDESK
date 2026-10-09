@@ -74,4 +74,15 @@ fn main() {
             let _ = res.compile();
         }
     }
+
+    // Exportar el hash corto del commit actual de Git a tiempo de compilación
+    let git_hash = std::process::Command::new("git")
+        .args(["rev-parse", "--short=7", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "10eb531".to_string());
+    println!("cargo:rustc-env=WOLFDESK_BUILD_GIT_HASH={}", git_hash);
 }

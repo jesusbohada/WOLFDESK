@@ -9,6 +9,7 @@ pub mod recorder;
 pub mod signaling_client;
 pub mod terminal_log;
 pub mod tray;
+pub mod updater;
 pub mod viewer;
 
 pub use capture::{ScreenCapturer, ScreenFrame};
@@ -22,5 +23,6 @@ pub use recorder::SessionRecorder;
 pub use signaling_client::SignalingClient;
 pub use terminal_log::{add_log, get_logs, init_terminal_logger, LogLevel};
 pub use tray::start_system_tray;
+pub use updater::{check_for_updates, get_build_git_hash, get_local_version, perform_update, UpdateStatus};
 pub use viewer::start_viewer_window;
 

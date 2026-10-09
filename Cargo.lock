@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "client-core"
-version = "0.1.0"
+version = "1.2.1"
 dependencies = [
  "base64",
  "eframe",

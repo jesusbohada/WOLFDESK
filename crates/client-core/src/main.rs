@@ -300,6 +300,82 @@ fn main() -> Result<(), eframe::Error> {
                         UiToNet::UpdateConfig(cfg) => {
                             *shared_cfg_for_ui.write().await = cfg;
                         }
+
+                        UiToNet::CheckForUpdates => {
+                            let tx_ui = tx_ui_notify_cmd.clone();
+                            tokio::task::spawn_blocking(move || {
+                                match client_core::check_for_updates() {
+                                    Ok(Some(remote_info)) => {
+                                        let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
+                                            client_core::UpdateStatus::UpdateAvailable {
+                                                current_commit: client_core::get_build_git_hash().to_string(),
+                                                latest_commit: remote_info.short_hash,
+                                                commit_message: remote_info.message,
+                                                date: remote_info.date,
+                                            },
+                                        ));
+                                        client_core::tray::wake_ui();
+                                    }
+                                    Ok(None) => {
+                                        let current_hash = client_core::get_build_git_hash().to_string();
+                                        let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                                            Ok(d) => {
+                                                let secs = d.as_secs();
+                                                let hours = (secs / 3600) % 24;
+                                                let mins = (secs / 60) % 60;
+                                                let s = secs % 60;
+                                                format!("{:02}:{:02}:{:02} UTC", hours, mins, s)
+                                            }
+                                            Err(_) => "reciente".to_string(),
+                                        };
+                                        let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
+                                            client_core::UpdateStatus::UpToDate {
+                                                commit: current_hash,
+                                                checked_time: now,
+                                            },
+                                        ));
+                                        client_core::tray::wake_ui();
+                                    }
+                                    Err(err) => {
+                                        let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
+                                            client_core::UpdateStatus::Error {
+                                                message: err,
+                                            },
+                                        ));
+                                        client_core::tray::wake_ui();
+                                    }
+                                }
+                            });
+                        }
+
+                        UiToNet::TriggerUpdate => {
+                            let tx_ui = tx_ui_notify_cmd.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let tx_progress = tx_ui.clone();
+                                let res = client_core::perform_update(move |step| {
+                                    let _ = tx_progress.send(NetToUi::UpdateProgress(step.to_string()));
+                                    client_core::tray::wake_ui();
+                                });
+                                match res {
+                                    Ok(msg) => {
+                                        let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
+                                            client_core::UpdateStatus::Success {
+                                                message: msg,
+                                            },
+                                        ));
+                                        client_core::tray::wake_ui();
+                                    }
+                                    Err(err) => {
+                                        let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
+                                            client_core::UpdateStatus::Error {
+                                                message: err,
+                                            },
+                                        ));
+                                        client_core::tray::wake_ui();
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             });
@@ -461,6 +537,9 @@ fn main() -> Result<(), eframe::Error> {
         viewport,
         ..Default::default()
     };
+
+    // Comprobar actualizaciones automáticamente en segundo plano al iniciar la app
+    let _ = tx_to_net.send(UiToNet::CheckForUpdates);
 
     let _res = eframe::run_native(
         "WolfDesk",
