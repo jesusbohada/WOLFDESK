@@ -89,3 +89,33 @@ pub fn restart_application() {
     std::process::exit(0);
 }
 
+/// Finaliza y mata completamente la aplicación y todos sus procesos,
+/// liberando sockets, archivos en disco y el ejecutable bloqueado por el sistema operativo.
+pub fn terminate_application() {
+    log::info!("🐺 [TERMINATE] Cerrando y matando procesos de WolfDesk para liberar recursos...");
+
+    #[cfg(windows)]
+    {
+        // En Windows, ejecutar PowerShell en segundo plano para limpiar cualquier proceso
+        // o subproceso remanente de wolfdesk de inmediato y desbloquear el .exe
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                "Start-Sleep -Milliseconds 150; Stop-Process -Name wolfdesk -Force -ErrorAction SilentlyContinue",
+            ])
+            .spawn();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("killall")
+            .args(["-9", "wolfdesk"])
+            .spawn();
+    }
+
+    std::process::exit(0);
+}
+
