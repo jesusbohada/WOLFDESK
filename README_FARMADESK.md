@@ -115,8 +115,37 @@ cd FARMADESK
 cargo build --release --bin farmadesk --features farmadesk
 sudo bash scripts/install_linux.sh
 ```
+> ✅ **¡Listo!** FarmaDesk quedará instalado en `/opt/farmadesk`, con acceso directo en tu menú de aplicaciones y comando global `farmadesk`.
+
+*(Opcional: Si prefieres empaquetar un archivo `.deb` para instalar con doble clic en cualquier máquina Debian/Ubuntu):*
+```bash
+bash scripts/package_deb.sh farmadesk
+sudo apt install ./farmadesk_1.2.0_amd64.deb
+```
+
+---
+
+### 🍎 macOS (Apple Silicon M-series e Intel)
+
+En una Mac con macOS Monterey, Ventura, Sonoma o Sequoia:
+
+```bash
+# 1. Herramientas y Rust
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
+# 2. Descargar el proyecto
+git clone https://github.com/jesusbohada/FARMADESK.git
+cd FARMADESK
+
+# 3. Compilar y empaquetar aplicación (.app y .dmg)
+bash scripts/package_macos.sh farmadesk
+```
+> *(Se generará el archivo `FarmaDesk.app` para arrastrar a `/Applications` y la imagen de disco `FarmaDesk-macOS-Universal.dmg`).*
 
 ---
 
 ## 📄 Licencia
 Este proyecto está bajo la Licencia MIT. Consulta el archivo `LICENSE` para más detalles.
+
