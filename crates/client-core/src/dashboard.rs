@@ -134,6 +134,7 @@ pub struct DashboardApp {
 
     // Gestor de Actualizaciones
     pub update_status: crate::updater::UpdateStatus,
+    pub pending_restart_commit: Option<String>,
 
     // Libreta de direcciones / Contactos
     pub contact_search_query: String,
@@ -216,6 +217,7 @@ impl DashboardApp {
             admin_pin_input: String::new(),
             admin_unlock_error: None,
             update_status: crate::updater::UpdateStatus::NotChecked,
+            pending_restart_commit: crate::updater::get_pending_restart_commit(),
             contact_search_query: String::new(),
             contact_alias_input: String::new(),
             contact_id_input: String::new(),
@@ -424,6 +426,9 @@ impl eframe::App for DashboardApp {
                     self.file_status_message = "Explorador remoto sincronizado.".to_string();
                 }
                 NetToUi::UpdateStatusChanged(status) => {
+                    if let crate::updater::UpdateStatus::Success { .. } = &status {
+                        self.pending_restart_commit = crate::updater::get_pending_restart_commit().or_else(|| Some("más reciente".to_string()));
+                    }
                     self.update_status = status;
                 }
                 NetToUi::UpdateProgress(step) => {
@@ -547,7 +552,11 @@ impl eframe::App for DashboardApp {
                 );
                 ui.label(RichText::new(format!("v{} ({})", crate::updater::get_local_version(), crate::updater::get_build_git_hash())).weak().size(12.0));
 
-                if let crate::updater::UpdateStatus::UpdateAvailable { ref latest_commit, .. } = self.update_status {
+                if self.pending_restart_commit.is_some() || matches!(self.update_status, crate::updater::UpdateStatus::Success { .. }) {
+                    if ui.button(RichText::new("🔄 Reiniciar para aplicar actualización").strong().color(Color32::from_rgb(52, 211, 153))).clicked() {
+                        crate::restart_application();
+                    }
+                } else if let crate::updater::UpdateStatus::UpdateAvailable { ref latest_commit, .. } = self.update_status {
                     if ui.button(RichText::new(format!("⚡ Actualizar ({})", latest_commit)).strong().color(Color32::from_rgb(250, 204, 21))).clicked() {
                         self.active_tab = ActiveTab::Settings;
                     }
@@ -1615,7 +1624,23 @@ impl DashboardApp {
 
             match &self.update_status {
                 crate::updater::UpdateStatus::NotChecked => {
-                    ui.label("Estado: Presiona 'Buscar Actualizaciones' para verificar si hay novedades.");
+                    if let Some(pending) = &self.pending_restart_commit {
+                        egui::Frame::none()
+                            .fill(Color32::from_rgb(16, 45, 30))
+                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(52, 211, 153)))
+                            .rounding(4.0)
+                            .inner_margin(12.0)
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("🎉 ¡ACTUALIZACIÓN INSTALADA EN ESTE EQUIPO!").strong().color(Color32::from_rgb(52, 211, 153)).size(14.0));
+                                ui.label(format!("La nueva versión ({}) ya está en el disco. Debe reiniciar {} para que el sistema la ejecute:", pending, brand.app_name));
+                                ui.add_space(6.0);
+                                if ui.add(egui::Button::new(RichText::new(format!("🔄 Reiniciar {} Ahora", brand.app_name)).color(Color32::WHITE).strong().size(13.0)).fill(Color32::from_rgb(16, 185, 129))).clicked() {
+                                    crate::restart_application();
+                                }
+                            });
+                    } else {
+                        ui.label("Estado: Presiona 'Buscar Actualizaciones' para verificar si hay novedades.");
+                    }
                 }
                 crate::updater::UpdateStatus::Checking => {
                     ui.horizontal(|ui| {
@@ -1630,27 +1655,43 @@ impl DashboardApp {
                     });
                 }
                 crate::updater::UpdateStatus::UpdateAvailable { current_commit, latest_commit, commit_message, date } => {
-                    let cur = current_commit.trim().to_lowercase();
-                    let lat = latest_commit.trim().to_lowercase();
-                    let is_same = cur == lat || (!cur.is_empty() && (cur.starts_with(&lat) || lat.starts_with(&cur)));
-
-                    if is_same {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("✅ {} está completamente actualizado a la última versión", brand.app_name)).color(Color32::from_rgb(52, 211, 153)).strong());
-                            ui.label(format!("(Commit actual: {})", current_commit));
-                        });
-                    } else {
+                    if let Some(pending) = &self.pending_restart_commit {
                         egui::Frame::none()
-                            .fill(Color32::from_rgb(30, 27, 20))
-                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(250, 204, 21)))
+                            .fill(Color32::from_rgb(16, 45, 30))
+                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(52, 211, 153)))
                             .rounding(4.0)
-                            .inner_margin(10.0)
+                            .inner_margin(12.0)
                             .show(ui, |ui| {
-                                ui.label(RichText::new("⚡ ¡NUEVA VERSIÓN DETECTADA EN GITHUB!").strong().color(Color32::from_rgb(250, 204, 21)).size(14.0));
-                                ui.label(format!("• Versión actual instalada: {}", current_commit));
-                                ui.label(format!("• Nueva versión disponible: {} ({})", latest_commit, date));
-                                ui.label(RichText::new(format!("• Novedades: {}", commit_message)).italics().color(Color32::from_rgb(226, 232, 240)));
+                                ui.label(RichText::new("🎉 ¡ACTUALIZACIÓN INSTALADA EN ESTE EQUIPO!").strong().color(Color32::from_rgb(52, 211, 153)).size(14.0));
+                                ui.label(format!("La nueva versión ({}) ya está en el disco. Debe reiniciar {} para comenzar a utilizarla:", pending, brand.app_name));
+                                ui.add_space(6.0);
+                                if ui.add(egui::Button::new(RichText::new(format!("🔄 Reiniciar {} Ahora", brand.app_name)).color(Color32::WHITE).strong().size(13.0)).fill(Color32::from_rgb(16, 185, 129))).clicked() {
+                                    crate::restart_application();
+                                }
                             });
+                    } else {
+                        let cur = current_commit.trim().to_lowercase();
+                        let lat = latest_commit.trim().to_lowercase();
+                        let is_same = cur == lat || (!cur.is_empty() && (cur.starts_with(&lat) || lat.starts_with(&cur)));
+
+                        if is_same {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(format!("✅ {} está completamente actualizado a la última versión", brand.app_name)).color(Color32::from_rgb(52, 211, 153)).strong());
+                                ui.label(format!("(Commit actual: {})", current_commit));
+                            });
+                        } else {
+                            egui::Frame::none()
+                                .fill(Color32::from_rgb(30, 27, 20))
+                                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(250, 204, 21)))
+                                .rounding(4.0)
+                                .inner_margin(10.0)
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("⚡ ¡NUEVA VERSIÓN DETECTADA EN GITHUB!").strong().color(Color32::from_rgb(250, 204, 21)).size(14.0));
+                                    ui.label(format!("• Versión actual instalada: {}", current_commit));
+                                    ui.label(format!("• Nueva versión disponible: {} ({})", latest_commit, date));
+                                    ui.label(RichText::new(format!("• Novedades: {}", commit_message)).italics().color(Color32::from_rgb(226, 232, 240)));
+                                });
+                        }
                     }
                 }
                 crate::updater::UpdateStatus::Updating { step } => {
@@ -1667,11 +1708,21 @@ impl DashboardApp {
                         });
                 }
                 crate::updater::UpdateStatus::Success { message } => {
-                    ui.label(RichText::new(format!("🎉 {}", message)).strong().color(Color32::from_rgb(52, 211, 153)));
-                    ui.add_space(5.0);
-                    if ui.add(egui::Button::new(RichText::new(format!("🔄 Reiniciar {} Ahora", brand.app_name)).color(Color32::WHITE).strong()).fill(brand.button_primary)).clicked() {
-                        crate::restart_application();
-                    }
+                    egui::Frame::none()
+                        .fill(Color32::from_rgb(16, 45, 30))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(52, 211, 153)))
+                        .rounding(4.0)
+                        .inner_margin(12.0)
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("🎉 ¡ACTUALIZACIÓN INSTALADA CORRECTAMENTE!").strong().color(Color32::from_rgb(52, 211, 153)).size(14.0));
+                            ui.label(RichText::new(message).color(Color32::from_rgb(226, 232, 240)));
+                            ui.add_space(8.0);
+                            ui.label("La nueva versión ya se encuentra grabada en el equipo. Reinicie ahora para que el sistema comience a ejecutarla:");
+                            ui.add_space(6.0);
+                            if ui.add(egui::Button::new(RichText::new(format!("🔄 Reiniciar {} Ahora", brand.app_name)).color(Color32::WHITE).strong().size(13.0)).fill(Color32::from_rgb(16, 185, 129))).clicked() {
+                                crate::restart_application();
+                            }
+                        });
                 }
                 crate::updater::UpdateStatus::Error { message } => {
                     ui.label(RichText::new(format!("❌ Error: {}", message)).color(Color32::from_rgb(239, 68, 68)));
@@ -1681,20 +1732,32 @@ impl DashboardApp {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 let is_busy = matches!(self.update_status, crate::updater::UpdateStatus::Checking | crate::updater::UpdateStatus::Updating { .. });
+                let is_already_updated = self.pending_restart_commit.is_some() || matches!(self.update_status, crate::updater::UpdateStatus::Success { .. });
+
                 ui.add_enabled_ui(!is_busy, |ui| {
                     if ui.button(RichText::new("🔄 Buscar Actualizaciones").strong()).clicked() {
-                        self.update_status = crate::updater::UpdateStatus::Checking;
-                        let _ = self.tx_to_net.send(UiToNet::CheckForUpdates);
+                        if let Some(pending) = &self.pending_restart_commit {
+                            self.update_status = crate::updater::UpdateStatus::Success {
+                                message: format!("La actualización ({}) ya fue descargada e instalada en disco. Reinicie {} para activarla.", pending, brand.app_name),
+                            };
+                        } else {
+                            self.update_status = crate::updater::UpdateStatus::Checking;
+                            let _ = self.tx_to_net.send(UiToNet::CheckForUpdates);
+                        }
                     }
                 });
 
-                let can_update = match &self.update_status {
-                    crate::updater::UpdateStatus::UpdateAvailable { current_commit, latest_commit, .. } => {
-                        let cur = current_commit.trim().to_lowercase();
-                        let lat = latest_commit.trim().to_lowercase();
-                        !cur.is_empty() && !lat.is_empty() && cur != lat && !cur.starts_with(&lat) && !lat.starts_with(&cur)
+                let can_update = if is_already_updated {
+                    false
+                } else {
+                    match &self.update_status {
+                        crate::updater::UpdateStatus::UpdateAvailable { current_commit, latest_commit, .. } => {
+                            let cur = current_commit.trim().to_lowercase();
+                            let lat = latest_commit.trim().to_lowercase();
+                            !cur.is_empty() && !lat.is_empty() && cur != lat && !cur.starts_with(&lat) && !lat.starts_with(&cur)
+                        }
+                        _ => false,
                     }
-                    _ => false,
                 };
 
                 ui.add_enabled_ui(!is_busy && can_update, |ui| {
@@ -1703,7 +1766,9 @@ impl DashboardApp {
                         btn = btn.fill(Color32::from_rgb(16, 185, 129)).stroke(Stroke::new(1.0_f32, Color32::WHITE));
                     }
                     let resp = ui.add(btn);
-                    let resp = if !can_update {
+                    let resp = if is_already_updated {
+                        resp.on_disabled_hover_text("La versión más reciente ya fue instalada en el equipo. Reinicie la aplicación para utilizarla.")
+                    } else if !can_update {
                         resp.on_disabled_hover_text("Ya tienes instalada la versión más reciente.")
                     } else {
                         resp

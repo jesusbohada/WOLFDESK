@@ -63,9 +63,12 @@ pub fn restart_application() {
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+
         if let Ok(mut exe) = std::env::current_exe() {
             let official_exe = brand.exe_name;
-            let process_pattern = format!("{}.exe", brand.unix_bin_name);
 
             // Si el ejecutable actual fue renombrado durante la actualización a *.old_*,
             // restauramos el nombre oficial para no relanzar el binario antiguo
@@ -77,22 +80,25 @@ pub fn restart_application() {
             let exe_str = exe.to_string_lossy().to_string();
             let parent_dir = exe.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
 
-            // Usar cmd.exe /C con start: no depende de PowerShell, no tiene bloqueos de políticas
-            // y desvincula completamente el nuevo proceso de la consola/proceso padre.
+            let current_pid = std::process::id();
+            // Usar ping 127.0.0.1 -n 2 para una pausa no bloqueante de 1s (timeout falla sin consola adjunta).
+            // Si el proceso actual no cerró limpiamente tras 1s, se asegura matando únicamente su PID (sin /T).
+            // Luego lanza el nuevo ejecutable completamente desvinculado.
             let batch_cmd = if !parent_dir.is_empty() {
                 format!(
-                    "timeout /t 1 /nobreak >nul & taskkill /F /IM {} /T >nul 2>&1 & cd /d \"{}\" & start \"\" \"{}\"",
-                    process_pattern, parent_dir, exe_str
+                    "ping 127.0.0.1 -n 2 >nul & taskkill /F /PID {} >nul 2>&1 & cd /d \"{}\" & start \"\" \"{}\"",
+                    current_pid, parent_dir, exe_str
                 )
             } else {
                 format!(
-                    "timeout /t 1 /nobreak >nul & taskkill /F /IM {} /T >nul 2>&1 & start \"\" \"{}\"",
-                    process_pattern, exe_str
+                    "ping 127.0.0.1 -n 2 >nul & taskkill /F /PID {} >nul 2>&1 & start \"\" \"{}\"",
+                    current_pid, exe_str
                 )
             };
 
             let _ = std::process::Command::new("cmd")
                 .args(["/C", &batch_cmd])
+                .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
                 .spawn();
         }
     }
@@ -108,10 +114,15 @@ pub fn terminate_application() {
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+
         let process_pattern = format!("{}.exe", brand.unix_bin_name);
-        let kill_cmd = format!("timeout /t 1 /nobreak >nul & taskkill /F /IM {} /T >nul 2>&1", process_pattern);
+        let kill_cmd = format!("ping 127.0.0.1 -n 2 >nul & taskkill /F /IM {} /T >nul 2>&1", process_pattern);
         let _ = std::process::Command::new("cmd")
             .args(["/C", &kill_cmd])
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
             .spawn();
     }
 

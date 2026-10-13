@@ -11,6 +11,43 @@ pub fn get_build_git_hash() -> &'static str {
     COMPILED_HASH.trim()
 }
 
+fn get_pending_restart_marker_path() -> PathBuf {
+    let brand = crate::get_brand();
+    std::env::temp_dir().join(format!("{}_pending_restart.txt", brand.unix_bin_name))
+}
+
+pub fn set_pending_restart_commit(commit: &str) {
+    let path = get_pending_restart_marker_path();
+    let _ = std::fs::write(&path, commit.trim());
+}
+
+pub fn get_pending_restart_commit() -> Option<String> {
+    let path = get_pending_restart_marker_path();
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let s = content.trim();
+            if !s.is_empty() {
+                let local_hash = get_build_git_hash().trim().to_lowercase();
+                let pending_clean = s.to_lowercase();
+                if local_hash == pending_clean
+                    || local_hash.starts_with(&pending_clean)
+                    || pending_clean.starts_with(&local_hash)
+                {
+                    let _ = std::fs::remove_file(&path);
+                    return None;
+                }
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub fn clear_pending_restart_commit() {
+    let path = get_pending_restart_marker_path();
+    let _ = std::fs::remove_file(&path);
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpdateStatus {
     NotChecked,
@@ -108,73 +145,76 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
     let local_clean = local_hash.to_lowercase();
     let augmented_path = get_augmented_path();
 
-    // Intento 1: Consultar la API de GitHub mediante curl (rápido, trae mensaje de commit y fecha)
     let brand = crate::get_brand();
     let curl_cmd = if cfg!(windows) { "curl.exe" } else { "curl" };
-    let api_url = format!("https://api.github.com/repos/{}/commits/main", brand.github_owner_repo);
     let user_agent = format!("User-Agent: {}", brand.app_name);
 
-    if let Ok(output) = Command::new(curl_cmd)
-        .env("PATH", &augmented_path)
-        .args(["-s", "--connect-timeout", "6", "-H", &user_agent, &api_url])
-        .output()
-    {
-        if output.status.success() {
-            let body = String::from_utf8_lossy(&output.stdout);
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-                if let Some(sha) = json["sha"].as_str() {
-                    let short_sha = if sha.len() >= 7 { &sha[..7] } else { sha };
-                    let message = json["commit"]["message"]
-                        .as_str()
-                        .unwrap_or("Actualización del sistema")
-                        .lines()
-                        .next()
-                        .unwrap_or("Actualización del sistema")
-                        .to_string();
-                    let date = json["commit"]["committer"]["date"]
-                        .as_str()
-                        .or_else(|| json["commit"]["author"]["date"].as_str())
-                        .unwrap_or("")
-                        .to_string();
+    // Si es FarmaDesk (repositorio privado), consultar primero su repo y luego el repo público sincronizado
+    let candidate_repos = if brand.is_farmadesk() {
+        vec![brand.github_owner_repo, "jesusbohada/WOLFDESK"]
+    } else {
+        vec![brand.github_owner_repo]
+    };
 
-                    let sha_clean = sha.trim().to_lowercase();
-                    let short_clean = short_sha.trim().to_lowercase();
+    // Intento 1: Consultar la API de GitHub mediante curl (rápido, trae mensaje de commit y fecha)
+    for repo in &candidate_repos {
+        let api_url = format!("https://api.github.com/repos/{}/commits/main", repo);
 
-                    let mut parent_matches = false;
-                    if let Some(parents) = json["parents"].as_array() {
-                        for p in parents {
-                            if let Some(psha) = p["sha"].as_str() {
-                                let pclean = psha.trim().to_lowercase();
-                                if pclean == local_clean || pclean.starts_with(&local_clean) || local_clean.starts_with(&pclean) {
-                                    if message.to_lowercase().contains("release")
-                                        || message.to_lowercase().contains("binario")
-                                        || message.to_lowercase().contains(brand.exe_name)
-                                        || message.to_lowercase().contains("wolfdesk")
-                                        || message.to_lowercase().contains("farmadesk")
-                                    {
+        if let Ok(output) = Command::new(curl_cmd)
+            .env("PATH", &augmented_path)
+            .args(["-s", "--connect-timeout", "6", "-H", &user_agent, &api_url])
+            .output()
+        {
+            if output.status.success() {
+                let body = String::from_utf8_lossy(&output.stdout);
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(sha) = json["sha"].as_str() {
+                        let short_sha = if sha.len() >= 7 { &sha[..7] } else { sha };
+                        let message = json["commit"]["message"]
+                            .as_str()
+                            .unwrap_or("Actualización del sistema")
+                            .lines()
+                            .next()
+                            .unwrap_or("Actualización del sistema")
+                            .to_string();
+                        let date = json["commit"]["committer"]["date"]
+                            .as_str()
+                            .or_else(|| json["commit"]["author"]["date"].as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        let sha_clean = sha.trim().to_lowercase();
+                        let short_clean = short_sha.trim().to_lowercase();
+
+                        let mut parent_matches = false;
+                        if let Some(parents) = json["parents"].as_array() {
+                            for p in parents {
+                                if let Some(psha) = p["sha"].as_str() {
+                                    let pclean = psha.trim().to_lowercase();
+                                    if pclean == local_clean || pclean.starts_with(&local_clean) || local_clean.starts_with(&pclean) {
                                         parent_matches = true;
                                         break;
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // Comparar de forma estricta e insensible a mayúsculas/minúsculas
-                    if sha_clean == local_clean
-                        || short_clean == local_clean
-                        || sha_clean.starts_with(&local_clean)
-                        || local_clean.starts_with(&short_clean)
-                        || parent_matches
-                    {
-                        return Ok(None); // Ya está actualizado al 100%
-                    } else {
-                        return Ok(Some(RemoteUpdateInfo {
-                            commit_hash: sha.to_string(),
-                            short_hash: short_sha.to_string(),
-                            message,
-                            date,
-                        }));
+                        // Comparar de forma estricta e insensible a mayúsculas/minúsculas
+                        if sha_clean == local_clean
+                            || short_clean == local_clean
+                            || sha_clean.starts_with(&local_clean)
+                            || local_clean.starts_with(&short_clean)
+                            || parent_matches
+                        {
+                            return Ok(None); // Ya está actualizado al 100%
+                        } else {
+                            return Ok(Some(RemoteUpdateInfo {
+                                commit_hash: sha.to_string(),
+                                short_hash: short_sha.to_string(),
+                                message,
+                                date,
+                            }));
+                        }
                     }
                 }
             }
@@ -182,34 +222,36 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
     }
 
     // Intento 2: Usar git ls-remote directamente (sin límites de rate limit de API)
-    let ls_remote_url = format!("https://github.com/{}.git", brand.github_owner_repo);
-    if let Ok(output) = Command::new("git")
-        .env("PATH", &augmented_path)
-        .args(["ls-remote", &ls_remote_url, "HEAD"])
-        .output()
-    {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Some(line) = stdout.lines().next() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(remote_sha) = parts.first() {
-                    let short_sha = if remote_sha.len() >= 7 { &remote_sha[..7] } else { remote_sha };
-                    let remote_clean = remote_sha.trim().to_lowercase();
-                    let short_clean = short_sha.trim().to_lowercase();
+    for repo in &candidate_repos {
+        let ls_remote_url = format!("https://github.com/{}.git", repo);
+        if let Ok(output) = Command::new("git")
+            .env("PATH", &augmented_path)
+            .args(["ls-remote", &ls_remote_url, "HEAD"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = stdout.lines().next() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if let Some(remote_sha) = parts.first() {
+                        let short_sha = if remote_sha.len() >= 7 { &remote_sha[..7] } else { remote_sha };
+                        let remote_clean = remote_sha.trim().to_lowercase();
+                        let short_clean = short_sha.trim().to_lowercase();
 
-                    if remote_clean == local_clean
-                        || short_clean == local_clean
-                        || remote_clean.starts_with(&local_clean)
-                        || local_clean.starts_with(&short_clean)
-                    {
-                        return Ok(None);
-                    } else {
-                        return Ok(Some(RemoteUpdateInfo {
-                            commit_hash: remote_sha.to_string(),
-                            short_hash: short_sha.to_string(),
-                            message: "Nueva versión disponible en la rama principal".to_string(),
-                            date: "".to_string(),
-                        }));
+                        if remote_clean == local_clean
+                            || short_clean == local_clean
+                            || remote_clean.starts_with(&local_clean)
+                            || local_clean.starts_with(&short_clean)
+                        {
+                            return Ok(None);
+                        } else {
+                            return Ok(Some(RemoteUpdateInfo {
+                                commit_hash: remote_sha.to_string(),
+                                short_hash: short_sha.to_string(),
+                                message: "Nueva versión disponible en la rama principal".to_string(),
+                                date: "".to_string(),
+                            }));
+                        }
                     }
                 }
             }
@@ -304,11 +346,15 @@ where
 
     // URLs oficiales en GitHub (rama main raw, blob raw y releases)
     let owner_repo = brand.github_owner_repo;
-    let urls = [
+    let mut urls = vec![
         format!("https://raw.githubusercontent.com/{}/main/{}", owner_repo, exe_name),
         format!("https://github.com/{}/raw/main/{}", owner_repo, exe_name),
         format!("https://github.com/{}/releases/latest/download/{}", owner_repo, exe_name),
     ];
+    if brand.is_farmadesk() {
+        urls.push(format!("https://raw.githubusercontent.com/jesusbohada/WOLFDESK/main/{}", exe_name));
+        urls.push(format!("https://github.com/jesusbohada/WOLFDESK/raw/main/{}", exe_name));
+    }
 
     let mut download_ok = false;
     let augmented_path = get_augmented_path();
@@ -442,6 +488,7 @@ where
 
     let _ = std::fs::remove_file(&temp_download);
 
+    set_pending_restart_commit("más reciente");
     let final_msg = format!("¡{} se ha actualizado correctamente a la última versión! Presione 'Reiniciar {} Ahora' para disfrutar de las mejoras.", brand.app_name, brand.app_name);
     report_step(&final_msg);
     Ok(final_msg)
@@ -667,6 +714,7 @@ where
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_else(|| "nuevo".to_string());
 
+    set_pending_restart_commit(commit_hash.trim());
     let final_msg = format!("{} actualizado exitosamente al commit [{}]. Reinicie la aplicación para disfrutar de las mejoras.", brand.app_name, commit_hash.trim());
     report_step(&final_msg);
     Ok(final_msg)

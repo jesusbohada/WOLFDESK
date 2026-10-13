@@ -4,8 +4,8 @@ echo ==============================================
 echo        REINICIO RAPIDO DE FARMADESK
 echo ==============================================
 echo 1. Cerrando instancias anteriores de FarmaDesk...
-taskkill /F /IM farmadesk.exe /T >nul 2>&1
-timeout /t 1 /nobreak >nul
+taskkill /F /IM farmadesk.exe >nul 2>&1
+ping 127.0.0.1 -n 2 >nul
 
 echo 2. Iniciando FarmaDesk de forma limpia...
 if exist "%~dp0farmadesk.exe" (
