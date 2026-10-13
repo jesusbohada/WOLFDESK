@@ -18,4 +18,4 @@ if exist "%~dp0farmadesk.exe" (
     start "" farmadesk.exe
     echo [OK] Comando de inicio enviado.
 )
-timeout /t 2 /nobreak >nul
+ping 127.0.0.1 -n 2 >nul
