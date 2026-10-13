@@ -109,12 +109,14 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
     let augmented_path = get_augmented_path();
 
     // Intento 1: Consultar la API de GitHub mediante curl (rápido, trae mensaje de commit y fecha)
+    let brand = crate::get_brand();
     let curl_cmd = if cfg!(windows) { "curl.exe" } else { "curl" };
-    let api_url = "https://api.github.com/repos/jesusbohada/WOLFDESK/commits/main";
+    let api_url = format!("https://api.github.com/repos/{}/commits/main", brand.github_owner_repo);
+    let user_agent = format!("User-Agent: {}", brand.app_name);
 
     if let Ok(output) = Command::new(curl_cmd)
         .env("PATH", &augmented_path)
-        .args(["-s", "--connect-timeout", "6", "-H", "User-Agent: WolfDesk", api_url])
+        .args(["-s", "--connect-timeout", "6", "-H", &user_agent, &api_url])
         .output()
     {
         if output.status.success() {
@@ -146,7 +148,9 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
                                 if pclean == local_clean || pclean.starts_with(&local_clean) || local_clean.starts_with(&pclean) {
                                     if message.to_lowercase().contains("release")
                                         || message.to_lowercase().contains("binario")
-                                        || message.to_lowercase().contains("wolfdesk.exe")
+                                        || message.to_lowercase().contains(brand.exe_name)
+                                        || message.to_lowercase().contains("wolfdesk")
+                                        || message.to_lowercase().contains("farmadesk")
                                     {
                                         parent_matches = true;
                                         break;
@@ -178,9 +182,10 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
     }
 
     // Intento 2: Usar git ls-remote directamente (sin límites de rate limit de API)
+    let ls_remote_url = format!("https://github.com/{}.git", brand.github_owner_repo);
     if let Ok(output) = Command::new("git")
         .env("PATH", &augmented_path)
-        .args(["ls-remote", "https://github.com/jesusbohada/WOLFDESK.git", "HEAD"])
+        .args(["ls-remote", &ls_remote_url, "HEAD"])
         .output()
     {
         if output.status.success() {
@@ -281,21 +286,23 @@ where
 {
     report_step("Conectando con los servidores de GitHub para descargar la actualización...");
 
-    let exe_name = if cfg!(windows) { "wolfdesk.exe" } else { "wolfdesk" };
+    let brand = crate::get_brand();
+    let exe_name = if cfg!(windows) { brand.exe_name } else { brand.unix_bin_name };
     let temp_dir = std::env::temp_dir();
     let pid = std::process::id();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let temp_download = temp_dir.join(format!("wolfdesk_update_{}_{}.tmp", pid, ts));
+    let temp_download = temp_dir.join(format!("{}_update_{}_{}.tmp", brand.unix_bin_name, pid, ts));
     let _ = std::fs::remove_file(&temp_download);
 
     // URLs oficiales en GitHub (rama main raw, blob raw y releases)
+    let owner_repo = brand.github_owner_repo;
     let urls = [
-        format!("https://raw.githubusercontent.com/jesusbohada/WOLFDESK/main/{}", exe_name),
-        format!("https://github.com/jesusbohada/WOLFDESK/raw/main/{}", exe_name),
-        format!("https://github.com/jesusbohada/WOLFDESK/releases/latest/download/{}", exe_name),
+        format!("https://raw.githubusercontent.com/{}/main/{}", owner_repo, exe_name),
+        format!("https://github.com/{}/raw/main/{}", owner_repo, exe_name),
+        format!("https://github.com/{}/releases/latest/download/{}", owner_repo, exe_name),
     ];
 
     let mut download_ok = false;
@@ -354,7 +361,7 @@ where
 
     if !download_ok || !temp_download.exists() {
         let _ = std::fs::remove_file(&temp_download);
-        return Err("No fue posible descargar la nueva versión de WolfDesk desde GitHub. Verifique su conexión a Internet.".to_string());
+        return Err(format!("No fue posible descargar la nueva versión de {} desde GitHub. Verifique su conexión a Internet.", brand.app_name));
     }
 
     // Validar cabecera binaria para garantizar que la descarga es un ejecutable válido y no HTML de error
@@ -371,7 +378,7 @@ where
         }
     }
 
-    report_step("Instalando nueva versión de WolfDesk en este equipo...");
+    report_step(&format!("Instalando nueva versión de {} en este equipo...", brand.app_name));
 
     #[cfg(windows)]
     {
@@ -389,7 +396,7 @@ where
 
         // 2. Si está en ProgramFiles
         if let Ok(prog_files) = std::env::var("ProgramFiles") {
-            let pf_dest = PathBuf::from(prog_files).join("WolfDesk").join(exe_name);
+            let pf_dest = PathBuf::from(prog_files).join(brand.install_folder_name).join(exe_name);
             if pf_dest.exists() {
                 let old_pf = pf_dest.with_file_name(format!("{}.old_pf_{}_{}", exe_name, pid, ts));
                 let _ = std::fs::remove_file(&old_pf);
@@ -400,7 +407,7 @@ where
 
         // 3. Si está en LOCALAPPDATA
         if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-            let local_dest = PathBuf::from(local_appdata).join("Programs/WolfDesk").join(exe_name);
+            let local_dest = PathBuf::from(local_appdata).join(format!("Programs/{}", brand.install_folder_name)).join(exe_name);
             if local_dest.exists() {
                 let old_local = local_dest.with_file_name(format!("{}.old_appdata_{}_{}", exe_name, pid, ts));
                 let _ = std::fs::remove_file(&old_local);
@@ -418,8 +425,9 @@ where
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&cur_exe, std::fs::Permissions::from_mode(0o755));
         }
-        if Path::new("/opt/wolfdesk/wolfdesk").exists() {
-            let opt_dest = Path::new("/opt/wolfdesk/wolfdesk");
+        let linux_opt = format!("/opt/{}/{}", brand.unix_bin_name, brand.unix_bin_name);
+        if Path::new(&linux_opt).exists() {
+            let opt_dest = Path::new(&linux_opt);
             let _ = std::fs::remove_file(opt_dest);
             let _ = std::fs::copy(&temp_download, opt_dest);
             use std::os::unix::fs::PermissionsExt;
@@ -429,7 +437,7 @@ where
 
     let _ = std::fs::remove_file(&temp_download);
 
-    let final_msg = "¡WolfDesk se ha actualizado correctamente a la última versión! Presione 'Reiniciar WolfDesk Ahora' para disfrutar de las mejoras.".to_string();
+    let final_msg = format!("¡{} se ha actualizado correctamente a la última versión! Presione 'Reiniciar {} Ahora' para disfrutar de las mejoras.", brand.app_name, brand.app_name);
     report_step(&final_msg);
     Ok(final_msg)
 }

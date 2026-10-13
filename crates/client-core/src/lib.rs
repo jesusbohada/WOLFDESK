@@ -1,3 +1,5 @@
+pub mod app_launcher;
+pub mod brand;
 pub mod capture;
 pub mod config;
 pub mod dashboard;
@@ -12,6 +14,8 @@ pub mod tray;
 pub mod updater;
 pub mod viewer;
 
+pub use app_launcher::run_desktop_app;
+pub use brand::{get_brand, BrandConfig, BrandType};
 pub use capture::{enumerate_monitors, MonitorBounds, ScreenCapturer, ScreenFrame};
 pub use config::{AppConfig, Contact};
 pub use dashboard::DashboardApp;
@@ -26,27 +30,30 @@ pub use tray::start_system_tray;
 pub use updater::{check_for_updates, get_build_git_hash, get_local_version, perform_update, UpdateStatus};
 pub use viewer::start_viewer_window;
 
-/// Reinicia completamente la aplicación / servicio WolfDesk después de una breve pausa
+/// Reinicia completamente la aplicación / servicio después de una breve pausa
 pub fn restart_application() {
-    log::info!("🐺 [RESTART] Reiniciando la aplicación / servicio WolfDesk de forma limpia...");
+    let brand = get_brand();
+    log::info!("🔄 [RESTART] Reiniciando la aplicación / servicio {} de forma limpia...", brand.app_name);
 
     #[cfg(target_os = "linux")]
     {
-        let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("/opt/wolfdesk/wolfdesk"));
+        let bin_name = brand.unix_bin_name;
+        let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from(format!("/opt/{}/{}", bin_name, bin_name)));
         let exe_str = exe.to_string_lossy().to_string();
         let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
         let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "/home/caja/.Xauthority".to_string());
 
         // 1. Si existe el servicio systemd, solicitar reinicio formal a systemd
-        if std::path::Path::new("/etc/systemd/system/wolfdesk.service").exists() {
+        let service_file = format!("/etc/systemd/system/{}.service", bin_name);
+        if std::path::Path::new(&service_file).exists() {
             let _ = std::process::Command::new("systemctl")
-                .args(["restart", "wolfdesk"])
+                .args(["restart", bin_name])
                 .spawn();
         } else {
             // 2. Si no es servicio systemd, esperar salida, limpiar procesos y relanzar
             let restart_cmd = format!(
-                "sleep 1 && killall -9 wolfdesk 2>/dev/null; sleep 0.5 && DISPLAY={} XAUTHORITY={} nohup '{}' >/dev/null 2>&1 &",
-                display, xauthority, exe_str
+                "sleep 1 && killall -9 {} 2>/dev/null; sleep 0.5 && DISPLAY={} XAUTHORITY={} nohup '{}' >/dev/null 2>&1 &",
+                bin_name, display, xauthority, exe_str
             );
             let _ = std::process::Command::new("sh")
                 .args(["-c", &restart_cmd])
@@ -57,11 +64,14 @@ pub fn restart_application() {
     #[cfg(windows)]
     {
         if let Ok(mut exe) = std::env::current_exe() {
+            let official_exe = brand.exe_name;
+            let process_pattern = format!("{}.exe", brand.unix_bin_name);
+
             // Si el ejecutable actual fue renombrado durante la actualización a *.old_*,
-            // debemos restaurar el nombre original wolfdesk.exe para no relanzar el binario antiguo
+            // restauramos el nombre oficial para no relanzar el binario antiguo
             if let Some(file_name) = exe.file_name().and_then(|n| n.to_str()) {
                 if file_name.contains(".old") {
-                    exe.set_file_name("wolfdesk.exe");
+                    exe.set_file_name(official_exe);
                 }
             }
             let exe_str = exe.to_string_lossy().to_string();
@@ -71,13 +81,13 @@ pub fn restart_application() {
             // y desvincula completamente el nuevo proceso de la consola/proceso padre.
             let batch_cmd = if !parent_dir.is_empty() {
                 format!(
-                    "timeout /t 1 /nobreak >nul & taskkill /F /IM wolfdesk.exe /T >nul 2>&1 & cd /d \"{}\" & start \"\" \"{}\"",
-                    parent_dir, exe_str
+                    "timeout /t 1 /nobreak >nul & taskkill /F /IM {} /T >nul 2>&1 & cd /d \"{}\" & start \"\" \"{}\"",
+                    process_pattern, parent_dir, exe_str
                 )
             } else {
                 format!(
-                    "timeout /t 1 /nobreak >nul & taskkill /F /IM wolfdesk.exe /T >nul 2>&1 & start \"\" \"{}\"",
-                    exe_str
+                    "timeout /t 1 /nobreak >nul & taskkill /F /IM {} /T >nul 2>&1 & start \"\" \"{}\"",
+                    process_pattern, exe_str
                 )
             };
 
@@ -93,21 +103,22 @@ pub fn restart_application() {
 /// Finaliza y mata completamente la aplicación y todos sus procesos,
 /// liberando sockets, archivos en disco y el ejecutable bloqueado por el sistema operativo.
 pub fn terminate_application() {
-    log::info!("🐺 [TERMINATE] Cerrando y matando procesos de WolfDesk para liberar recursos...");
+    let brand = get_brand();
+    log::info!("🛑 [TERMINATE] Cerrando y matando procesos de {} para liberar recursos...", brand.app_name);
 
     #[cfg(windows)]
     {
-        // En Windows, ejecutar taskkill para limpiar cualquier proceso
-        // o subproceso remanente de wolfdesk de inmediato y desbloquear el .exe
+        let process_pattern = format!("{}.exe", brand.unix_bin_name);
+        let kill_cmd = format!("timeout /t 1 /nobreak >nul & taskkill /F /IM {} /T >nul 2>&1", process_pattern);
         let _ = std::process::Command::new("cmd")
-            .args(["/C", "timeout /t 1 /nobreak >nul & taskkill /F /IM wolfdesk.exe /T >nul 2>&1"])
+            .args(["/C", &kill_cmd])
             .spawn();
     }
 
     #[cfg(target_os = "linux")]
     {
         let _ = std::process::Command::new("killall")
-            .args(["-9", "wolfdesk"])
+            .args(["-9", brand.unix_bin_name])
             .spawn();
     }
 

@@ -36,6 +36,7 @@ dist_macos/
 *.zip
 *.exe
 !wolfdesk.exe
+!farmadesk.exe
 *.old*
 *.pdb
 

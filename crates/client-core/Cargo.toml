@@ -7,6 +7,14 @@ edition = "2021"
 name = "wolfdesk"
 path = "src/main.rs"
 
+[[bin]]
+name = "farmadesk"
+path = "src/bin/farmadesk.rs"
+
+[features]
+default = []
+farmadesk = []
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.20"

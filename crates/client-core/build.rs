@@ -41,21 +41,42 @@ fn main() {
 
     #[cfg(windows)]
     {
-        if ico_path.exists() {
+        let is_farmadesk = std::env::var("CARGO_FEATURE_FARMADESK").is_ok()
+            || std::env::var("CARGO_BIN_NAME").map(|s| s == "farmadesk").unwrap_or(false);
+
+        let (ico_file, prod_name, file_desc, comp_name, orig_filename) = if is_farmadesk {
+            (
+                "assets/farmadesk.ico",
+                "FarmaDesk Pro",
+                "FarmaDesk - Software de Escritorio Remoto Farmanorte",
+                "Farmanorte / FarmaDesk",
+                "farmadesk.exe",
+            )
+        } else {
+            (
+                "assets/wolfdesk.ico",
+                "WolfDesk Pro",
+                "WolfDesk - Software de Escritorio Remoto Seguro",
+                "WolfDesk Software",
+                "wolfdesk.exe",
+            )
+        };
+
+        if Path::new(ico_file).exists() {
             let mut res = winres::WindowsResource::new();
-            res.set_icon("assets/wolfdesk.ico");
-            res.set("ProductName", "WolfDesk Pro");
-            res.set("FileDescription", "WolfDesk - Software de Escritorio Remoto Seguro");
-            res.set("CompanyName", "WolfDesk Software");
-            res.set("LegalCopyright", "Copyright (C) 2026 WolfDesk Software. Todos los derechos reservados.");
-            res.set("OriginalFilename", "wolfdesk.exe");
-            res.set("InternalName", "wolfdesk");
-            res.set("ProductVersion", "1.2.0.0");
-            res.set("FileVersion", "1.2.0.0");
+            res.set_icon(ico_file);
+            res.set("ProductName", prod_name);
+            res.set("FileDescription", file_desc);
+            res.set("CompanyName", comp_name);
+            res.set("LegalCopyright", "Copyright (C) 2026. Todos los derechos reservados.");
+            res.set("OriginalFilename", orig_filename);
+            res.set("InternalName", if is_farmadesk { "farmadesk" } else { "wolfdesk" });
+            res.set("ProductVersion", "1.2.1.0");
+            res.set("FileVersion", "1.2.1.0");
             res.set_manifest(r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
-  <assemblyIdentity version="1.2.0.0" processorArchitecture="*" name="WolfDesk.Software.WolfDesk" type="win32"/>
-  <description>WolfDesk Remote Desktop</description>
+  <assemblyIdentity version="1.2.1.0" processorArchitecture="*" name="FarmaDesk.WolfDesk.RemoteDesktop" type="win32"/>
+  <description>Remote Desktop</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

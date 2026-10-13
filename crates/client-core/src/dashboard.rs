@@ -533,15 +533,16 @@ impl eframe::App for DashboardApp {
         // 3. Barra Superior
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.add_space(10.0);
+            let brand = crate::get_brand();
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🐺").size(24.0));
+                ui.label(RichText::new(brand.icon_symbol).size(24.0));
                 ui.heading(
-                    RichText::new("WolfDesk")
+                    RichText::new(brand.app_name)
                         .strong()
                         .size(20.0)
-                        .color(Color32::from_rgb(0, 229, 255)),
+                        .color(brand.header_text_color),
                 );
-                ui.label(RichText::new(format!("Pro v{} ({})", crate::updater::get_local_version(), crate::updater::get_build_git_hash())).weak().size(12.0));
+                ui.label(RichText::new(format!("v{} ({})", crate::updater::get_local_version(), crate::updater::get_build_git_hash())).weak().size(12.0));
 
                 if let crate::updater::UpdateStatus::UpdateAvailable { ref latest_commit, .. } = self.update_status {
                     if ui.button(RichText::new(format!("⚡ Actualizar ({})", latest_commit)).strong().color(Color32::from_rgb(250, 204, 21))).clicked() {
@@ -1595,14 +1596,15 @@ impl DashboardApp {
         });
 
         ui.add_space(15.0);
+        let brand = crate::get_brand();
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🚀 Actualizaciones de WolfDesk").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.label(RichText::new(format!("🚀 Actualizaciones de {}", brand.app_name)).strong().size(15.0).color(brand.primary_accent));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new(format!("Versión actual: v{} ({})", crate::updater::get_local_version(), crate::updater::get_build_git_hash())).weak());
                 });
             });
-            ui.label("Comprueba si hay nuevas versiones de WolfDesk disponibles en el repositorio oficial de GitHub.");
+            ui.label(format!("Comprueba si hay nuevas versiones de {} disponibles en el repositorio oficial de GitHub ({}).", brand.app_name, brand.github_owner_repo));
             ui.add_space(8.0);
 
             match &self.update_status {
@@ -1612,12 +1614,12 @@ impl DashboardApp {
                 crate::updater::UpdateStatus::Checking => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(RichText::new("Consultando repositorio en GitHub...").color(Color32::from_rgb(56, 189, 248)));
+                        ui.label(RichText::new("Consultando repositorio en GitHub...").color(brand.primary_accent));
                     });
                 }
                 crate::updater::UpdateStatus::UpToDate { commit, checked_time } => {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("✅ WolfDesk está completamente actualizado.").strong().color(Color32::from_rgb(52, 211, 153)));
+                        ui.label(RichText::new(format!("✅ {} está completamente actualizado.", brand.app_name)).strong().color(Color32::from_rgb(52, 211, 153)));
                         ui.label(format!("(Commit actual: {} comprobado a las {})", commit, checked_time));
                     });
                 }
@@ -1628,7 +1630,7 @@ impl DashboardApp {
 
                     if is_same {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("✅ WolfDesk está completamente actualizado a la última versión").color(Color32::from_rgb(52, 211, 153)).strong());
+                            ui.label(RichText::new(format!("✅ {} está completamente actualizado a la última versión", brand.app_name)).color(Color32::from_rgb(52, 211, 153)).strong());
                             ui.label(format!("(Commit actual: {})", current_commit));
                         });
                     } else {
@@ -1648,20 +1650,20 @@ impl DashboardApp {
                 crate::updater::UpdateStatus::Updating { step } => {
                     egui::Frame::none()
                         .fill(Color32::from_rgb(15, 23, 42))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0, 229, 255)))
+                        .stroke(Stroke::new(1.0_f32, brand.primary_accent))
                         .rounding(4.0)
                         .inner_margin(10.0)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(RichText::new(format!("Actualizando WolfDesk: {}", step)).strong().color(Color32::from_rgb(0, 229, 255)));
+                                ui.label(RichText::new(format!("Actualizando {}: {}", brand.app_name, step)).strong().color(brand.primary_accent));
                             });
                         });
                 }
                 crate::updater::UpdateStatus::Success { message } => {
                     ui.label(RichText::new(format!("🎉 {}", message)).strong().color(Color32::from_rgb(52, 211, 153)));
                     ui.add_space(5.0);
-                    if ui.add(egui::Button::new(RichText::new("🔄 Reiniciar WolfDesk Ahora").color(Color32::WHITE).strong()).fill(Color32::from_rgb(14, 116, 144))).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(format!("🔄 Reiniciar {} Ahora", brand.app_name)).color(Color32::WHITE).strong()).fill(brand.button_primary)).clicked() {
                         crate::restart_application();
                     }
                 }
@@ -1690,7 +1692,7 @@ impl DashboardApp {
                 };
 
                 ui.add_enabled_ui(!is_busy && can_update, |ui| {
-                    let mut btn = egui::Button::new(RichText::new("⚡ Actualizar WolfDesk Ahora").strong());
+                    let mut btn = egui::Button::new(RichText::new(format!("⚡ Actualizar {} Ahora", brand.app_name)).strong());
                     if can_update && !is_busy {
                         btn = btn.fill(Color32::from_rgb(16, 185, 129)).stroke(Stroke::new(1.0_f32, Color32::WHITE));
                     }
@@ -1710,7 +1712,7 @@ impl DashboardApp {
 
         ui.add_space(15.0);
         ui.group(|ui| {
-            ui.label(RichText::new("Sistema e Instalación Permanente").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+            ui.label(RichText::new("Sistema e Instalación Permanente").strong().size(15.0).color(brand.primary_accent));
             ui.add_space(5.0);
             ui.horizontal(|ui| {
                 ui.label("Estado en este equipo:");
@@ -1724,14 +1726,14 @@ impl DashboardApp {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if !self.is_installed {
-                    if ui.add(egui::Button::new(RichText::new("🚀 Instalar WolfDesk").color(Color32::WHITE).strong()).fill(Color32::from_rgb(14, 116, 144))).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(format!("🚀 Instalar {}", brand.app_name)).color(Color32::WHITE).strong()).fill(brand.button_primary)).clicked() {
                         self.show_install_dialog = true;
                     }
                 } else {
-                    if ui.add(egui::Button::new(RichText::new("🗑️ Desinstalar WolfDesk").color(Color32::WHITE).strong()).fill(Color32::from_rgb(239, 68, 68))).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(format!("🗑️ Desinstalar {}", brand.app_name)).color(Color32::WHITE).strong()).fill(Color32::from_rgb(239, 68, 68))).clicked() {
                         let _ = crate::installer::uninstall_from_system();
                         self.is_installed = false;
-                        self.install_feedback = Some("WolfDesk y su ID persistente han sido eliminados de este equipo.".to_string());
+                        self.install_feedback = Some(format!("{} y su ID persistente han sido eliminados de este equipo.", brand.app_name));
                         self.show_install_dialog = true;
                     }
                 }
@@ -1741,21 +1743,21 @@ impl DashboardApp {
         ui.add_space(15.0);
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🔄 Control del Servicio y Procesos").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.label(RichText::new("🔄 Control del Servicio y Procesos").strong().size(15.0).color(brand.primary_accent));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new("🟢 Servicio Activo").color(Color32::from_rgb(16, 185, 129)).strong());
                 });
             });
             ui.add_space(4.0);
-            ui.label("Gestiona la ejecución y ciclo de vida de WolfDesk. Puedes reiniciar los subsistemas en segundo plano o cerrar/matar completamente la aplicación para desbloquear el archivo ejecutable (.exe) o realizar tareas de actualización.");
+            ui.label(format!("Gestiona la ejecución y ciclo de vida de {}. Puedes reiniciar los subsistemas en segundo plano o cerrar/matar completamente la aplicación para desbloquear el archivo ejecutable (.exe) o realizar tareas de actualización.", brand.app_name));
             ui.add_space(8.0);
 
             ui.horizontal(|ui| {
                 let restart_btn = egui::Button::new(RichText::new("🔄 Reiniciar Servicio").color(Color32::WHITE).strong())
-                    .fill(Color32::from_rgb(14, 116, 144))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(56, 189, 248)));
+                    .fill(brand.button_primary)
+                    .stroke(Stroke::new(1.0_f32, brand.button_border));
 
-                if ui.add(restart_btn).on_hover_text("Detiene y vuelve a levantar de forma limpia e inmediata el servicio y proceso de WolfDesk").clicked() {
+                if ui.add(restart_btn).on_hover_text(format!("Detiene y vuelve a levantar de forma limpia e inmediata el servicio y proceso de {}", brand.app_name)).clicked() {
                     self.show_restart_confirm_dialog = true;
                     self.show_exit_confirm_dialog = false;
                 }
@@ -1766,7 +1768,7 @@ impl DashboardApp {
                     .fill(Color32::from_rgb(185, 28, 28))
                     .stroke(Stroke::new(1.0_f32, Color32::from_rgb(248, 113, 113)));
 
-                if ui.add(kill_btn).on_hover_text("Cierra y finaliza completamente todas las instancias de WolfDesk, liberando el archivo ejecutable en Windows").clicked() {
+                if ui.add(kill_btn).on_hover_text(format!("Cierra y finaliza completamente todas las instancias de {}, liberando el archivo ejecutable en Windows", brand.app_name)).clicked() {
                     self.show_exit_confirm_dialog = true;
                     self.show_restart_confirm_dialog = false;
                 }
@@ -1785,7 +1787,7 @@ impl DashboardApp {
                     .rounding(4.0)
                     .inner_margin(10.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("⚠️ ¿Deseas reiniciar completamente el servicio de WolfDesk?").strong().color(Color32::from_rgb(250, 204, 21)));
+                        ui.label(RichText::new(format!("⚠️ ¿Deseas reiniciar completamente el servicio de {}?", brand.app_name)).strong().color(Color32::from_rgb(250, 204, 21)));
                         ui.label("La aplicación se cerrará y volverá a levantarse automáticamente en 1 segundo con todos los subsistemas restablecidos.");
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
@@ -1812,7 +1814,7 @@ impl DashboardApp {
                     .rounding(4.0)
                     .inner_margin(10.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("🛑 ¿Deseas matar y cerrar completamente WolfDesk?").strong().color(Color32::from_rgb(239, 68, 68)));
+                        ui.label(RichText::new(format!("🛑 ¿Deseas matar y cerrar completamente {}?", brand.app_name)).strong().color(Color32::from_rgb(239, 68, 68)));
                         ui.label("Se cerrarán de inmediato todos los procesos y conexiones de la aplicación, liberando por completo el archivo ejecutable (.exe) para que puedas actualizarlo, reemplazarlo o moverlo libremente.");
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
