@@ -10,6 +10,9 @@ pub enum BrandType {
 #[derive(Debug, Clone)]
 pub struct BrandConfig {
     pub brand_type: BrandType,
+    pub brand_id: &'static str,
+    pub config_file_name: &'static str,
+    pub default_server_url: &'static str,
     pub app_name: &'static str,
     pub window_title: &'static str,
     pub brand_title: &'static str,
@@ -66,6 +69,9 @@ impl BrandConfig {
     pub fn wolfdesk() -> Self {
         Self {
             brand_type: BrandType::WolfDesk,
+            brand_id: "wolfdesk",
+            config_file_name: "remote_desktop_config.json",
+            default_server_url: "ws://127.0.0.1:9050/ws",
             app_name: "WolfDesk Pro",
             window_title: "WolfDesk Pro - Escritorio Remoto",
             brand_title: "🐺 WolfDesk",
@@ -93,6 +99,9 @@ impl BrandConfig {
     pub fn farmadesk() -> Self {
         Self {
             brand_type: BrandType::FarmaDesk,
+            brand_id: "farmadesk",
+            config_file_name: "farmadesk_config.json",
+            default_server_url: "ws://127.0.0.1:9050/ws",
             app_name: "FarmaDesk Pro",
             window_title: "FarmaDesk Pro - Escritorio Remoto",
             brand_title: "🔷 FarmaDesk",

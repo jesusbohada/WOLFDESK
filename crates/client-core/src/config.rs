@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
+#[allow(dead_code)]
 const CONFIG_FILE: &str = "remote_desktop_config.json";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -33,6 +34,9 @@ pub struct AppConfig {
     /// Libreta de direcciones / contactos guardados
     #[serde(default)]
     pub contacts: Vec<Contact>,
+    /// Ruta del archivo de configuración activo para la marca
+    #[serde(skip)]
+    pub active_config_file: String,
 }
 
 impl Default for AppConfig {
@@ -48,29 +52,54 @@ impl Default for AppConfig {
             default_permissions: SessionPermissions::default(),
             recent_ids: Vec::new(),
             contacts: Vec::new(),
+            active_config_file: String::new(),
         }
     }
 }
 
 impl AppConfig {
-    /// Carga la configuración desde el disco o crea una por defecto
-    pub fn load() -> Self {
-        if Path::new(CONFIG_FILE).exists() {
-            if let Ok(content) = fs::read_to_string(CONFIG_FILE) {
-                if let Ok(config) = serde_json::from_str::<AppConfig>(&content) {
+    /// Carga la configuración para una marca específica
+    pub fn load_for_brand(config_file: &str, default_server_url: &str) -> Self {
+        if Path::new(config_file).exists() {
+            if let Ok(content) = fs::read_to_string(config_file) {
+                if let Ok(mut config) = serde_json::from_str::<AppConfig>(&content) {
+                    config.active_config_file = config_file.to_string();
                     return config;
                 }
             }
         }
-        let default_config = Self::default();
+        // Compatibilidad hacia atrás con remote_desktop_config.json
+        if Path::new("remote_desktop_config.json").exists() {
+            if let Ok(content) = fs::read_to_string("remote_desktop_config.json") {
+                if let Ok(mut config) = serde_json::from_str::<AppConfig>(&content) {
+                    config.active_config_file = config_file.to_string();
+                    let _ = config.save();
+                    return config;
+                }
+            }
+        }
+        let mut default_config = Self::default();
+        default_config.server_url = default_server_url.to_string();
+        default_config.active_config_file = config_file.to_string();
         let _ = default_config.save();
         default_config
     }
 
+    /// Carga la configuración desde el disco para la marca activa
+    pub fn load() -> Self {
+        let brand = crate::get_brand();
+        Self::load_for_brand(brand.config_file_name, brand.default_server_url)
+    }
+
     /// Guarda la configuración actual en el disco
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let file = if self.active_config_file.is_empty() {
+            crate::get_brand().config_file_name
+        } else {
+            &self.active_config_file
+        };
         let json = serde_json::to_string_pretty(self)?;
-        fs::write(CONFIG_FILE, json)?;
+        fs::write(file, json)?;
         Ok(())
     }
 

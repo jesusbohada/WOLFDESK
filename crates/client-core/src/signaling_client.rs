@@ -6,13 +6,15 @@ use url::Url;
 
 pub struct SignalingClient {
     pub identity: Identity,
+    pub brand: String,
     server_url: String,
 }
 
 impl SignalingClient {
-    pub fn new(server_url: &str, identity: Identity) -> Self {
+    pub fn new(server_url: &str, identity: Identity, brand: &str) -> Self {
         Self {
             identity,
+            brand: brand.to_string(),
             server_url: server_url.to_string(),
         }
     }
@@ -26,7 +28,7 @@ impl SignalingClient {
         let url = Url::parse(&self.server_url)?;
 
         loop {
-            log::info!("Conectando al servidor de señalización: {}", url);
+            log::info!("Conectando al servidor de señalización [Marca: {}]: {}", self.brand, url);
 
             let (ws_stream, _) = match connect_async(url.clone()).await {
                 Ok(stream) => stream,
@@ -42,10 +44,11 @@ impl SignalingClient {
 
             let (mut write, mut read) = ws_stream.split();
 
-            // 1. Envía mensaje de registro inicial con el ID de 9 dígitos y la clave pública
+            // 1. Envía mensaje de registro inicial con el ID de 9 dígitos, clave pública y marca organizacional
             let reg_msg = SignalMessage::Register {
                 client_id: self.identity.numeric_id.clone(),
                 public_key: self.identity.public_key_hex(),
+                brand: Some(self.brand.clone()),
             };
             if let Ok(reg_json) = serde_json::to_string(&reg_msg) {
                 if write.send(Message::Text(reg_json)).await.is_err() {

@@ -134,10 +134,10 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
     crate::init_terminal_logger();
 
     let config = AppConfig::load();
-    // Carga o generación de la Identidad Fija Permanente del equipo (Ed25519)
-    let identity = load_or_create_identity();
+    // Carga o generación de la Identidad Fija Permanente del equipo (Ed25519) para la marca
+    let identity = load_or_create_identity(brand.install_folder_name);
     let my_id = identity.numeric_id.clone();
-    let client = SignalingClient::new(&config.server_url, identity);
+    let client = SignalingClient::new(&config.server_url, identity, brand.brand_id);
 
     // Canales bidireccionales entre la GUI (hilo principal) y el Motor de Red (Tokio)
     let (tx_to_net, mut rx_from_ui) = mpsc::unbounded_channel::<UiToNet>();
