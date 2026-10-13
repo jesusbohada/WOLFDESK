@@ -59,6 +59,16 @@ async fn main() {
     let routes = ws_route.or(ws_root).or(health_route);
     let port = 9050;
 
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn SetConsoleTitleA(lpConsoleTitle: *const u8) -> i32;
+        }
+        unsafe {
+            let _ = SetConsoleTitleA(b"Servidor de Senalizacion (Puerto 9050) - FarmaDesk & WolfDesk\0".as_ptr());
+        }
+    }
+
     println!("============================================================");
     println!(" 🚀 [Servidor de Señalización Multi-Organización v1.3]");
     println!(" Aislamiento de red activo: FarmaDesk (Farmanorte) & WolfDesk");
@@ -66,6 +76,21 @@ async fn main() {
     println!(" Escuchando conexiones WebSocket en ws://0.0.0.0:{}/ws", port);
     println!(" Endpoint de comprobación en http://localhost:{}/health", port);
     println!("============================================================");
+
+    // Verificar disponibilidad del puerto para evitar cierre abrupto de la terminal
+    match std::net::TcpListener::bind(("0.0.0.0", port)) {
+        Ok(listener) => {
+            drop(listener);
+        }
+        Err(e) => {
+            eprintln!("\n❌ ERROR: No se pudo enlazar el puerto {}: {}", port, e);
+            eprintln!("⚠️ Es muy probable que el puerto {} ya esté ocupado por otra instancia del servidor o por otra aplicación.", port);
+            eprintln!("\nPresione la tecla Enter para salir...");
+            let mut buf = String::new();
+            let _ = std::io::stdin().read_line(&mut buf);
+            return;
+        }
+    }
 
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
 }
