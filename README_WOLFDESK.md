@@ -14,7 +14,7 @@
 - ⚡ **Latencia Ultrabaja**: Captura GDI acelerada y renderizado directo con adaptación fluida a 60 FPS.
 - 🔒 **Cifrado E2E Asimétrico**: Autenticación criptográfica con llaves Ed25519. El ID del equipo es permanente y fijo.
 - 🖥️ **Multiplataforma Nativo**: Compatible con **Windows** (10/11), **Linux** (Ubuntu, Debian, Fedora, Arch) y **macOS** (Apple Silicon M-series e Intel).
-- 📁 **Gestor de Transferencia de Archivos**: Explorador bidireccional tipo AnyDesk entre el equipo local y el remoto.
+- 📁 **Gestor de Transferencia de Archivos**: Explorador bidireccional avanzado entre el equipo local y el remoto con navegación rápida y acceso directo al Home.
 - 🎛️ **Barra de Herramientas Flotante**:
   - Escalabilidad de pantalla (Ajustar a ventana, Estirar 100%, Píxel 1:1 original).
   - Selector de calidad de imagen en tiempo real (F1 Económico, F2 Estándar, F3 Alta, F4 Máxima 96% Nativa).

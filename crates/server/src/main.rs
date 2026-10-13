@@ -166,7 +166,7 @@ async fn handle_client(ws: WebSocket, peers: Peers, sessions: Sessions) {
                 }
 
                 Ok(ConnectAccept { from_id, permissions }) => {
-                    println!(">> [WOLFDESK] Sesión aceptada por '{}' con permisos: {:?}", from_id, permissions);
+                    println!(">> [{}] Sesión aceptada por '{}' con permisos: {:?}", current_brand.to_uppercase(), from_id, permissions);
                     if let Some(ref my_norm) = current_norm_id {
                         let target_norm = normalize_id(&from_id);
                         sessions.write().await.insert(my_norm.clone(), target_norm.clone());
@@ -176,12 +176,12 @@ async fn handle_client(ws: WebSocket, peers: Peers, sessions: Sessions) {
                 }
 
                 Ok(ConnectReject { from_id, reason }) => {
-                    println!(">> [WOLFDESK] Sesión rechazada por '{}': {}", from_id, reason);
+                    println!(">> [{}] Sesión rechazada por '{}': {}", current_brand.to_uppercase(), from_id, reason);
                     forward_to_target(&peers, &from_id, ConnectReject { from_id: current_raw_id.clone().unwrap_or_default(), reason }).await;
                 }
 
                 Ok(Disconnect { target_id, reason }) => {
-                    println!(">> [WOLFDESK] Sesión finalizada: {}", reason);
+                    println!(">> [{}] Sesión finalizada: {}", current_brand.to_uppercase(), reason);
                     let target_norm = normalize_id(&target_id);
                     if let Some(ref my_norm) = current_norm_id {
                         sessions.write().await.remove(my_norm);

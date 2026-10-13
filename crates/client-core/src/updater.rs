@@ -221,9 +221,14 @@ pub fn check_for_updates() -> Result<Option<RemoteUpdateInfo>, String> {
 
 /// Localiza la ruta base del repositorio o del script de actualización
 fn find_repo_path() -> Option<PathBuf> {
+    let brand = crate::get_brand();
     let candidates = [
+        PathBuf::from(format!("/home/caja/{}", brand.install_folder_name.to_uppercase())),
+        PathBuf::from(format!("/root/{}", brand.install_folder_name.to_uppercase())),
         PathBuf::from("/home/caja/WOLFDESK"),
         PathBuf::from("/root/WOLFDESK"),
+        PathBuf::from("/home/caja/FARMADESK"),
+        PathBuf::from("/root/FARMADESK"),
         PathBuf::from("."),
         PathBuf::from(".."),
     ];
@@ -248,7 +253,7 @@ fn find_repo_path() -> Option<PathBuf> {
     None
 }
 
-/// Ejecuta el proceso de actualización inteligente de WolfDesk:
+/// Ejecuta el proceso de actualización inteligente:
 /// 1. Si se detecta un repositorio de desarrollo con Cargo disponible, compila desde el código fuente.
 /// 2. En equipos de usuario final, equipos nuevos o portátiles sin Git/Cargo, descarga el binario precompilado
 ///    directamente desde GitHub y lo sustituye en caliente sin requerir herramientas de desarrollo.
@@ -448,6 +453,7 @@ where
     F: FnMut(&str),
 {
     let augmented_path = get_augmented_path();
+    let brand = crate::get_brand();
 
     // 1. Si existe scripts/update.sh en Linux, podemos invocarlo pasando el PATH adecuado
     #[cfg(target_os = "linux")]
@@ -458,7 +464,7 @@ where
             let res = Command::new("bash")
                 .arg(&update_script)
                 .env("PATH", &augmented_path)
-                .env("WOLFDESK_IN_APP_UPDATE", "1")
+                .env(format!("{}_IN_APP_UPDATE", brand.unix_bin_name.to_uppercase()), "1")
                 .output();
             match res {
                 Ok(out) if out.status.success() => {
@@ -471,7 +477,7 @@ where
                         .and_then(|o| String::from_utf8(o.stdout).ok())
                         .unwrap_or_else(|| "nuevo".to_string());
 
-                    let final_msg = format!("WolfDesk actualizado exitosamente al commit [{}]. Reinicie la aplicación para aplicar.", commit_hash.trim());
+                    let final_msg = format!("{} actualizado exitosamente al commit [{}]. Reinicie la aplicación para aplicar.", brand.app_name, commit_hash.trim());
                     report_step(&final_msg);
                     return Ok(final_msg);
                 }
@@ -527,16 +533,18 @@ where
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
+    let exe_name = brand.exe_name;
+
     #[cfg(windows)]
     {
-        let target_exe = repo_dir.join("target/release/wolfdesk.exe");
+        let target_exe = repo_dir.join(format!("target/release/{}", exe_name));
         if target_exe.exists() {
             let pid = std::process::id();
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let old_exe = repo_dir.join(format!("target/release/wolfdesk.exe.old_{}_{}", pid, ts));
+            let old_exe = repo_dir.join(format!("target/release/{}.old_{}_{}", exe_name, pid, ts));
             let _ = std::fs::remove_file(&old_exe);
             let _ = std::fs::rename(&target_exe, &old_exe);
         }
@@ -544,12 +552,19 @@ where
 
     report_step("Compilando nueva versión optimizada con Cargo (Release)...");
     let cargo_bin = find_cargo_executable();
-    let cargo_res = Command::new(&cargo_bin)
+    let mut cargo_cmd = Command::new(&cargo_bin);
+    cargo_cmd
         .current_dir(&repo_dir)
         .env("PATH", &augmented_path)
-        .env("WOLFDESK_BUILD_GIT_HASH", &git_hash)
-        .args(["build", "--release", "--bin", "wolfdesk"])
-        .output();
+        .env(format!("{}_BUILD_GIT_HASH", brand.unix_bin_name.to_uppercase()), &git_hash);
+
+    if brand.is_farmadesk() {
+        cargo_cmd.args(["build", "--release", "--bin", "farmadesk", "--features", "farmadesk"]);
+    } else {
+        cargo_cmd.args(["build", "--release", "--bin", "wolfdesk"]);
+    }
+
+    let cargo_res = cargo_cmd.output();
 
     match cargo_res {
         Ok(out) if out.status.success() => {
@@ -564,10 +579,9 @@ where
         }
     }
 
-    let exe_name = if cfg!(windows) { "wolfdesk.exe" } else { "wolfdesk" };
     let new_binary = repo_dir.join("target/release").join(exe_name);
     if !new_binary.exists() {
-        return Err("No se encontró el binario compilado en target/release/wolfdesk".to_string());
+        return Err(format!("No se encontró el binario compilado en target/release/{}", brand.unix_bin_name));
     }
 
     report_step("Instalando nuevo ejecutable en el sistema...");
@@ -578,14 +592,16 @@ where
         let _ = std::fs::remove_file(&root_bin);
         let _ = std::fs::copy(&new_binary, &root_bin);
 
-        if Path::new("/opt/wolfdesk").exists() {
-            let dest = Path::new("/opt/wolfdesk/wolfdesk");
-            let _ = std::fs::remove_file(dest);
-            let _ = std::fs::copy(&new_binary, dest);
+        let opt_dir = format!("/opt/{}", brand.unix_bin_name);
+        if Path::new(&opt_dir).exists() {
+            let dest = Path::new(&opt_dir).join(brand.unix_bin_name);
+            let _ = std::fs::remove_file(&dest);
+            let _ = std::fs::copy(&new_binary, &dest);
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
         }
-        if Path::new("/etc/systemd/system/wolfdesk.service").exists() {
+        let service_file = format!("/etc/systemd/system/{}.service", brand.unix_bin_name);
+        if Path::new(&service_file).exists() {
             let _ = Command::new("systemctl").arg("daemon-reload").output();
         }
     }
@@ -598,7 +614,7 @@ where
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        // 1. Actualizar wolfdesk.exe en la raíz del repositorio
+        // 1. Actualizar ejecutable en la raíz del repositorio
         let root_exe = repo_dir.join(exe_name);
         if root_exe.exists() {
             let old_root = repo_dir.join(format!("{}.old_root_{}_{}", exe_name, pid, ts));
@@ -621,7 +637,7 @@ where
 
         // 3. Actualizar instalación formal en ProgramFiles
         if let Ok(prog_files) = std::env::var("ProgramFiles") {
-            let dest = PathBuf::from(prog_files).join("WolfDesk").join(exe_name);
+            let dest = PathBuf::from(prog_files).join(brand.install_folder_name).join(exe_name);
             if dest.exists() && dest != new_binary {
                 let old_dest = dest.with_file_name(format!("{}.old_pf_{}_{}", exe_name, pid, ts));
                 let _ = std::fs::remove_file(&old_dest);
@@ -632,7 +648,7 @@ where
 
         // 4. Actualizar instalación formal en LOCALAPPDATA
         if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-            let dest = PathBuf::from(local_appdata).join("Programs/WolfDesk").join(exe_name);
+            let dest = PathBuf::from(local_appdata).join(format!("Programs/{}", brand.install_folder_name)).join(exe_name);
             if dest.exists() && dest != new_binary {
                 let old_dest = dest.with_file_name(format!("{}.old_appdata_{}_{}", exe_name, pid, ts));
                 let _ = std::fs::remove_file(&old_dest);
@@ -651,7 +667,7 @@ where
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_else(|| "nuevo".to_string());
 
-    let final_msg = format!("WolfDesk actualizado exitosamente al commit [{}]. Reinicie la aplicación para disfrutar de las mejoras.", commit_hash.trim());
+    let final_msg = format!("{} actualizado exitosamente al commit [{}]. Reinicie la aplicación para disfrutar de las mejoras.", brand.app_name, commit_hash.trim());
     report_step(&final_msg);
     Ok(final_msg)
 }

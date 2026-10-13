@@ -253,29 +253,42 @@ if (Test-Path $regPath) {{ Remove-Item -Path $regPath -Recurse -Force }}
 }
 
 #[cfg(target_os = "linux")]
-fn create_linux_desktop_entry(dest_exe: &Path) -> Result<(), String> {
-    let icon_bytes = include_bytes!("../assets/wolfdesk.png");
-    let _ = fs::write("/usr/share/pixmaps/wolfdesk.png", icon_bytes);
+#[cfg(feature = "farmadesk")]
+const BRAND_ICON_BYTES: &[u8] = include_bytes!("../assets/farmadesk.png");
 
+#[cfg(target_os = "linux")]
+#[cfg(not(feature = "farmadesk"))]
+const BRAND_ICON_BYTES: &[u8] = include_bytes!("../assets/wolfdesk.png");
+
+#[cfg(target_os = "linux")]
+fn create_linux_desktop_entry(dest_exe: &Path) -> Result<(), String> {
+    let brand = crate::get_brand();
+    let icon_path = format!("/usr/share/pixmaps/{}.png", brand.unix_bin_name);
+    let _ = fs::write(&icon_path, BRAND_ICON_BYTES);
+
+    let desktop_file = format!("{}.desktop", brand.unix_bin_name);
     let entry = format!(
         "[Desktop Entry]\n\
-        Name=WolfDesk\n\
-        Comment=WolfDesk Remote Desktop\n\
+        Name={}\n\
+        Comment={} Remote Desktop\n\
         Exec={}\n\
-        Icon=/usr/share/pixmaps/wolfdesk.png\n\
+        Icon={}\n\
         Terminal=false\n\
         Type=Application\n\
         Categories=Network;RemoteAccess;\n\
         StartupNotify=false\n\
         X-GNOME-Autostart-enabled=true\n",
-        dest_exe.display()
+        brand.app_name,
+        brand.app_name,
+        dest_exe.display(),
+        icon_path
     );
 
-    let _ = fs::write("/usr/share/applications/wolfdesk.desktop", &entry);
+    let _ = fs::write(format!("/usr/share/applications/{}", desktop_file), &entry);
 
     // Autostart del sistema para que inicie automáticamente al encender el equipo
     let _ = fs::create_dir_all("/etc/xdg/autostart");
-    let _ = fs::write("/etc/xdg/autostart/wolfdesk.desktop", &entry);
+    let _ = fs::write(format!("/etc/xdg/autostart/{}", desktop_file), &entry);
 
     // Accesos directos y Autostart para usuarios de escritorio
     let home_dirs = ["/home/caja", "/root"];
@@ -285,17 +298,17 @@ fn create_linux_desktop_entry(dest_exe: &Path) -> Result<(), String> {
             // .local/share/applications
             let user_apps = home_path.join(".local/share/applications");
             let _ = fs::create_dir_all(&user_apps);
-            let _ = fs::write(user_apps.join("wolfdesk.desktop"), &entry);
+            let _ = fs::write(user_apps.join(&desktop_file), &entry);
 
             // .config/autostart
             let user_autostart = home_path.join(".config/autostart");
             let _ = fs::create_dir_all(&user_autostart);
-            let _ = fs::write(user_autostart.join("wolfdesk.desktop"), &entry);
+            let _ = fs::write(user_autostart.join(&desktop_file), &entry);
 
             // Escritorio (Desktop)
             let user_desktop = home_path.join("Desktop");
             if user_desktop.exists() {
-                let desktop_shortcut = user_desktop.join("WolfDesk.desktop");
+                let desktop_shortcut = user_desktop.join(format!("{}.desktop", brand.install_folder_name));
                 let _ = fs::write(&desktop_shortcut, &entry);
                 use std::os::unix::fs::PermissionsExt;
                 let _ = fs::set_permissions(&desktop_shortcut, fs::Permissions::from_mode(0o755));
@@ -306,7 +319,7 @@ fn create_linux_desktop_entry(dest_exe: &Path) -> Result<(), String> {
     // Servicio systemd para que pueda ejecutarse como demonio en segundo plano permanente
     let service_content = format!(
         "[Unit]\n\
-        Description=WolfDesk Pro Remote Desktop\n\
+        Description={} Remote Desktop\n\
         After=network.target display-manager.service graphical.target\n\
         \n\
         [Service]\n\
@@ -320,9 +333,11 @@ fn create_linux_desktop_entry(dest_exe: &Path) -> Result<(), String> {
         \n\
         [Install]\n\
         WantedBy=graphical.target\n",
+        brand.app_name,
         dest_exe.display()
     );
-    let _ = fs::write("/etc/systemd/system/wolfdesk.service", service_content);
+    let service_file = format!("/etc/systemd/system/{}.service", brand.unix_bin_name);
+    let _ = fs::write(&service_file, service_content);
     let _ = std::process::Command::new("systemctl").arg("daemon-reload").output();
 
     Ok(())

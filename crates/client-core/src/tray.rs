@@ -20,7 +20,7 @@ pub fn wake_ui() {
 pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::dashboard::NetToUi>) {
     let id_clone = my_id.to_string();
     std::thread::spawn(move || {
-        use windows::core::{w, PCWSTR};
+        use windows::core::PCWSTR;
         use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM, HINSTANCE};
         use windows::Win32::UI::Shell::{
             Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, NIF_ICON, NIF_MESSAGE, NIF_TIP,
@@ -52,6 +52,9 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
         ) -> LRESULT {
             if msg == WM_TRAYICON {
                 let mouse_ev = lparam.0 as u32;
+                let brand = crate::get_brand();
+                let title_wide: Vec<u16> = brand.window_title.encode_utf16().chain(std::iter::once(0)).collect();
+
                 if mouse_ev == WM_LBUTTONUP || mouse_ev == WM_LBUTTONDBLCLK {
                     if let Ok(guard) = TRAY_TX.lock() {
                         if let Some(ref tx) = *guard {
@@ -59,7 +62,7 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
                             wake_ui();
                         }
                     }
-                    let hwnd_main = FindWindowW(None, w!("WolfDesk Pro - Escritorio Remoto"));
+                    let hwnd_main = FindWindowW(None, PCWSTR(title_wide.as_ptr()));
                     if hwnd_main.0 != 0 {
                         let _ = ShowWindow(hwnd_main, SW_SHOW);
                         let _ = ShowWindow(hwnd_main, SW_RESTORE);
@@ -67,9 +70,13 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
                     }
                 } else if mouse_ev == WM_RBUTTONUP {
                     if let Ok(hmenu) = CreatePopupMenu() {
-                        let _ = AppendMenuW(hmenu, MF_STRING, 1001, w!("🐺 Abrir WolfDesk"));
+                        let open_str = format!("{} Abrir {}", brand.icon_symbol, brand.app_name);
+                        let open_wide: Vec<u16> = open_str.encode_utf16().chain(std::iter::once(0)).collect();
+                        let _ = AppendMenuW(hmenu, MF_STRING, 1001, PCWSTR(open_wide.as_ptr()));
                         let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
-                        let _ = AppendMenuW(hmenu, MF_STRING, 1002, w!("🔄 Salir y Reiniciar WolfDesk"));
+                        let restart_str = format!("🔄 Salir y Reiniciar {}", brand.app_name);
+                        let restart_wide: Vec<u16> = restart_str.encode_utf16().chain(std::iter::once(0)).collect();
+                        let _ = AppendMenuW(hmenu, MF_STRING, 1002, PCWSTR(restart_wide.as_ptr()));
 
                         let mut pt = POINT::default();
                         let _ = GetCursorPos(&mut pt);
@@ -84,7 +91,7 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
                                     wake_ui();
                                 }
                             }
-                            let hwnd_main = FindWindowW(None, w!("WolfDesk Pro - Escritorio Remoto"));
+                            let hwnd_main = FindWindowW(None, PCWSTR(title_wide.as_ptr()));
                             if hwnd_main.0 != 0 {
                                 let _ = ShowWindow(hwnd_main, SW_SHOW);
                                 let _ = ShowWindow(hwnd_main, SW_RESTORE);
@@ -106,7 +113,11 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
         }
 
         unsafe {
-            let class_name = w!("WolfDeskTrayClass");
+            let brand = crate::get_brand();
+            let class_name_str = format!("{}TrayClass", brand.install_folder_name);
+            let class_name_wide: Vec<u16> = class_name_str.encode_utf16().chain(std::iter::once(0)).collect();
+            let class_name = PCWSTR(class_name_wide.as_ptr());
+
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(tray_proc),
                 lpszClassName: class_name,
@@ -115,10 +126,13 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
             };
             let _ = RegisterClassW(&wc);
 
+            let host_title = format!("{} Tray Host", brand.app_name);
+            let host_wide: Vec<u16> = host_title.encode_utf16().chain(std::iter::once(0)).collect();
+
             let hwnd = CreateWindowExW(
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
                 class_name,
-                w!("WolfDesk Tray Host"),
+                PCWSTR(host_wide.as_ptr()),
                 WS_OVERLAPPED,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
@@ -138,7 +152,7 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
             nid.uCallbackMessage = WM_TRAYICON;
             nid.hIcon = LoadIconW(HINSTANCE(0), IDI_APPLICATION).unwrap_or(HICON(0));
 
-            let tip_text = format!("🐺 WolfDesk Pro [{}] (Activo en segundo plano)", id_clone);
+            let tip_text = format!("{} {} [{}] (Activo en segundo plano)", brand.icon_symbol, brand.app_name, id_clone);
             let mut tip_utf16: Vec<u16> = tip_text.encode_utf16().collect();
             tip_utf16.truncate(127);
             tip_utf16.push(0);
@@ -149,7 +163,7 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
             }
 
             let _ = Shell_NotifyIconW(NIM_ADD, &nid);
-            log::info!("🐺 [TRAY WINDOWS] Icono en la bandeja del sistema registrado correctamente.");
+            log::info!("{} [TRAY WINDOWS] Icono en la bandeja del sistema registrado correctamente.", brand.icon_symbol);
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(0), 0, 0).as_bool() {
@@ -161,9 +175,16 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(feature = "farmadesk")]
+const BRAND_ICON_BYTES: &[u8] = include_bytes!("../assets/farmadesk.png");
+
+#[cfg(target_os = "linux")]
+#[cfg(not(feature = "farmadesk"))]
+const BRAND_ICON_BYTES: &[u8] = include_bytes!("../assets/wolfdesk.png");
+
+#[cfg(target_os = "linux")]
 fn get_tray_icon_pixmap() -> Vec<ksni::Icon> {
-    let png_bytes = include_bytes!("../assets/wolfdesk.png");
-    if let Ok(img) = image::load_from_memory(png_bytes) {
+    if let Ok(img) = image::load_from_memory(BRAND_ICON_BYTES) {
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
         let mut argb_data = Vec::with_capacity((w * h * 4) as usize);
@@ -189,11 +210,11 @@ fn get_tray_icon_pixmap() -> Vec<ksni::Icon> {
 pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::dashboard::NetToUi>) {
     let id_clone = my_id.to_string();
     std::thread::spawn(move || {
+        let brand = crate::get_brand();
         // 1. Escribir icono a disco para que el tema del escritorio o cargador lo encuentre siempre
-        let icon_bytes = include_bytes!("../assets/wolfdesk.png");
-        let _ = std::fs::write("/tmp/wolfdesk.png", icon_bytes);
-        let _ = std::fs::write("/tmp/preferences-desktop-remote-desktop.png", icon_bytes);
-        let _ = std::fs::write("/usr/share/pixmaps/wolfdesk.png", icon_bytes);
+        let _ = std::fs::write(format!("/tmp/{}.png", brand.unix_bin_name), BRAND_ICON_BYTES);
+        let _ = std::fs::write("/tmp/preferences-desktop-remote-desktop.png", BRAND_ICON_BYTES);
+        let _ = std::fs::write(format!("/usr/share/pixmaps/{}.png", brand.unix_bin_name), BRAND_ICON_BYTES);
 
         // 2. Asegurar que root tenga permiso en el bus de sesión D-Bus de /etc/dbus-1
         let dbus_dir = std::path::Path::new("/etc/dbus-1");
@@ -240,7 +261,7 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
 
         if let Some(ref addr) = dbus_address {
             std::env::set_var("DBUS_SESSION_BUS_ADDRESS", addr);
-            log::info!("🐺 [TRAY LINUX] Bus de sesión D-Bus configurado: {}", addr);
+            log::info!("{} [TRAY LINUX] Bus de sesión D-Bus configurado: {}", brand.icon_symbol, addr);
         } else {
             log::warn!("⚠️ [TRAY LINUX] No se pudo encontrar DBUS_SESSION_BUS_ADDRESS.");
         }
@@ -255,13 +276,13 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
 
         rt.block_on(async move {
             use ksni::TrayMethods;
-            let tray = WolfDeskLinuxTray {
+            let tray = BrandLinuxTray {
                 tx_to_ui,
                 my_id: id_clone,
             };
             match tray.spawn().await {
                 Ok(handle) => {
-                    log::info!("🐺 [TRAY LINUX] ✅ Icono de bandeja del sistema (KDE Plasma) iniciado con éxito.");
+                    log::info!("{} [TRAY LINUX] ✅ Icono de bandeja del sistema iniciado con éxito.", brand.icon_symbol);
                     std::mem::forget(handle);
                     loop {
                         tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
@@ -276,15 +297,15 @@ pub fn start_system_tray(my_id: &str, tx_to_ui: std::sync::mpsc::Sender<crate::d
 }
 
 #[cfg(target_os = "linux")]
-struct WolfDeskLinuxTray {
+struct BrandLinuxTray {
     tx_to_ui: std::sync::mpsc::Sender<crate::dashboard::NetToUi>,
     my_id: String,
 }
 
 #[cfg(target_os = "linux")]
-impl ksni::Tray for WolfDeskLinuxTray {
+impl ksni::Tray for BrandLinuxTray {
     fn id(&self) -> String {
-        "wolfdesk".into()
+        crate::get_brand().unix_bin_name.into()
     }
 
     fn category(&self) -> ksni::Category {
@@ -292,7 +313,7 @@ impl ksni::Tray for WolfDeskLinuxTray {
     }
 
     fn title(&self) -> String {
-        format!("WolfDesk Pro [{}]", self.my_id)
+        format!("{} [{}]", crate::get_brand().app_name, self.my_id)
     }
 
     fn status(&self) -> ksni::Status {
@@ -312,8 +333,9 @@ impl ksni::Tray for WolfDeskLinuxTray {
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
+        let brand = crate::get_brand();
         ksni::ToolTip {
-            title: "WolfDesk Pro".into(),
+            title: brand.app_name.into(),
             description: format!("ID: {} | Servicio activo en segundo plano", self.my_id),
             icon_name: "preferences-desktop-remote-desktop".into(),
             icon_pixmap: get_tray_icon_pixmap(),
@@ -321,7 +343,8 @@ impl ksni::Tray for WolfDeskLinuxTray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        log::info!("🐺 [TRAY LINUX] Clic en icono de bandeja. Restaurando ventana...");
+        let brand = crate::get_brand();
+        log::info!("{} [TRAY LINUX] Clic en icono de bandeja. Restaurando ventana...", brand.icon_symbol);
         let _ = self.tx_to_ui.send(crate::dashboard::NetToUi::ShowWindow);
         wake_ui();
     }
@@ -333,9 +356,10 @@ impl ksni::Tray for WolfDeskLinuxTray {
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
+        let brand = crate::get_brand();
         vec![
             StandardItem {
-                label: "🐺 Abrir WolfDesk".into(),
+                label: format!("{} Abrir {}", brand.icon_symbol, brand.app_name),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx_to_ui.send(crate::dashboard::NetToUi::ShowWindow);
                     wake_ui();
@@ -350,7 +374,7 @@ impl ksni::Tray for WolfDeskLinuxTray {
             }.into(),
             MenuItem::Separator,
             StandardItem {
-                label: "🔄 Salir de WolfDesk (Reiniciar Servicio)".into(),
+                label: format!("🔄 Salir de {} (Reiniciar Servicio)", brand.app_name),
                 activate: Box::new(|_| {
                     crate::restart_application();
                 }),

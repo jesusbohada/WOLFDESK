@@ -121,7 +121,7 @@ Exec=$BIN_LINK %u
 Icon=wolfdesk
 Terminal=false
 Categories=Network;RemoteAccess;Utility;
-Keywords=remote;desktop;anydesk;teamviewer;vnc;rdp;wolfdesk;
+Keywords=remote;desktop;control;support;wolfdesk;
 StartupWMClass=wolfdesk
 EOF
 fi

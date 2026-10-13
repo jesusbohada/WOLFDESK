@@ -90,6 +90,7 @@ pub enum NetToUi {
 }
 
 pub struct DashboardApp {
+    pub brand: &'static crate::BrandConfig,
     pub my_id: String,
     pub config: AppConfig,
     pub active_tab: ActiveTab,
@@ -112,7 +113,7 @@ pub struct DashboardApp {
     pub chat_history: Vec<(String, String)>,
     pub active_peer_id: Option<String>,
 
-    // Transferencia de archivos estilo AnyDesk (Dual-Pane)
+    // Transferencia de archivos (Dual-Pane)
     pub local_file_path: String,
     pub local_file_entries: Vec<proto::FileEntry>,
     pub selected_local_file: Option<String>,
@@ -179,7 +180,9 @@ impl DashboardApp {
         let home_dir = crate::FileTransferManager::get_user_home_dir();
         let (local_path, local_entries) = crate::FileTransferManager::list_directory(&home_dir);
         let is_installed = crate::installer::is_installed();
+        let brand = crate::get_brand();
         Self {
+            brand,
             my_id,
             config,
             active_tab: ActiveTab::Main,
@@ -192,7 +195,7 @@ impl DashboardApp {
             saved_quality: 70,
             saved_scale_mode: 0,
             saved_fps_limit: 0,
-            status_text: "Conectando al clúster WolfDesk...".to_string(),
+            status_text: format!("Conectando al clúster {}...", brand.app_name),
             is_online: false,
             incoming_request_from: None,
             incoming_permissions: SessionPermissions::default(),
@@ -285,7 +288,7 @@ impl eframe::App for DashboardApp {
         if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            log::info!("🐺 [WOLFDESK] Ventana minimizada a la bandeja del sistema (área de notificación cerca al reloj).");
+            log::info!("{} [{}] Ventana minimizada a la bandeja del sistema (área de notificación cerca al reloj).", self.brand.icon_symbol, self.brand.app_name.to_uppercase());
         }
 
         // 1. Drenar eventos entrantes desde el hilo de red o la bandeja
@@ -328,7 +331,7 @@ impl eframe::App for DashboardApp {
                 }
                 NetToUi::SessionAccepted(target) => {
                     self.remote_session_state = RemoteSessionState::Connected { target_id: target.clone() };
-                    self.status_text = format!("🐺 Sesión WolfDesk activa con [{}]", target);
+                    self.status_text = format!("{} Sesión {} activa con [{}]", self.brand.icon_symbol, self.brand.app_name, target);
                     self.active_peer_id = Some(target.clone());
                     self.config.add_recent_id(&target);
                     let _ = self.tx_to_net.send(UiToNet::RequestRemoteFiles {
@@ -434,18 +437,18 @@ impl eframe::App for DashboardApp {
 
         // 2. Diálogo Modal de Solicitud Entrante
         if let Some(ref from_id) = self.incoming_request_from.clone() {
-            egui::Window::new("🐺 WolfDesk - Solicitud Entrante")
+            egui::Window::new(format!("{} {} - Solicitud Entrante", self.brand.icon_symbol, self.brand.app_name))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .frame(egui::Frame::window(&ctx.style()).stroke(Stroke::new(2.0_f32, Color32::from_rgb(0, 229, 255))))
+                .frame(egui::Frame::window(&ctx.style()).stroke(Stroke::new(2.0_f32, self.brand.button_border)))
                 .show(ctx, |ui| {
                     ui.add_space(10.0);
                     ui.label(
                         RichText::new(format!("El usuario [{}] solicita controlar tu equipo.", from_id))
                             .strong()
                             .size(16.0)
-                            .color(Color32::from_rgb(0, 229, 255)),
+                            .color(self.brand.primary_accent),
                     );
                     ui.add_space(10.0);
                     ui.separator();
@@ -486,14 +489,14 @@ impl eframe::App for DashboardApp {
 
         // 2b. Diálogo Modal de Instalación en el Sistema
         if self.show_install_dialog {
-            egui::Window::new("🚀 Instalar WolfDesk en este Equipo")
+            egui::Window::new(format!("🚀 Instalar {} en este Equipo", self.brand.app_name))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .frame(egui::Frame::window(&ctx.style()).stroke(Stroke::new(2.0_f32, Color32::from_rgb(0, 229, 255))))
+                .frame(egui::Frame::window(&ctx.style()).stroke(Stroke::new(2.0_f32, self.brand.button_border)))
                 .show(ctx, |ui| {
                     ui.add_space(5.0);
-                    ui.label(RichText::new("¿Deseas instalar formalmente WolfDesk?").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                    ui.label(RichText::new(format!("¿Deseas instalar formalmente {}?", self.brand.app_name)).strong().size(15.0).color(self.brand.primary_accent));
                     ui.add_space(8.0);
                     ui.label("• El ID asignado a este equipo será FIJO y permanente.");
                     ui.label("• Se creará acceso directo en el Escritorio y Menú Inicio.");
@@ -509,7 +512,7 @@ impl eframe::App for DashboardApp {
                         }
                     } else {
                         ui.horizontal(|ui| {
-                            if ui.add(egui::Button::new(RichText::new("✅ Instalar Ahora").color(Color32::WHITE).strong()).fill(Color32::from_rgb(14, 116, 144))).clicked() {
+                            if ui.add(egui::Button::new(RichText::new("✅ Instalar Ahora").color(Color32::WHITE).strong()).fill(self.brand.button_primary)).clicked() {
                                 match crate::installer::install_to_system() {
                                     Ok(m) => {
                                         self.is_installed = true;
@@ -571,7 +574,7 @@ impl eframe::App for DashboardApp {
                 }
 
                 if !self.is_installed {
-                    if ui.add(egui::Button::new(RichText::new("🚀 Instalar").color(Color32::from_rgb(0, 229, 255)).strong()).stroke(Stroke::new(1.0_f32, Color32::from_rgb(0, 229, 255)))).clicked() {
+                    if ui.add(egui::Button::new(RichText::new("🚀 Instalar").color(self.brand.primary_accent).strong()).stroke(Stroke::new(1.0_f32, self.brand.button_border))).clicked() {
                         self.show_install_dialog = true;
                     }
                 }
@@ -728,7 +731,7 @@ impl DashboardApp {
         ui.columns(2, |cols| {
             cols[0].group(|ui| {
                 ui.set_min_height(240.0);
-                ui.label(RichText::new("ESTE PUESTO WOLFDESK").strong().size(14.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.label(RichText::new(format!("ESTE PUESTO {}", self.brand.app_name.to_uppercase())).strong().size(14.0).color(self.brand.primary_accent));
                 ui.label("Tu identificador seguro en la red:");
                 ui.add_space(15.0);
 
@@ -737,11 +740,11 @@ impl DashboardApp {
                         RichText::new(&self.my_id)
                             .strong()
                             .size(34.0)
-                            .color(Color32::from_rgb(0, 229, 255)),
+                            .color(self.brand.primary_accent),
                     );
 
                     ui.add_space(10.0);
-                    if ui.button(RichText::new("📋 Copiar ID WolfDesk").strong()).clicked() {
+                    if ui.button(RichText::new(format!("📋 Copiar ID {}", self.brand.app_name)).strong()).clicked() {
                         ui.output_mut(|o| o.copied_text = self.my_id.clone());
                     }
                 });
@@ -788,7 +791,7 @@ impl DashboardApp {
                         &mut self.view_only_mode,
                         RichText::new("👁️ Modo Espectador (Solo lectura)")
                             .strong()
-                            .color(Color32::from_rgb(0, 229, 255)),
+                            .color(self.brand.primary_accent),
                     ).on_hover_text("Solo visualización: teclado y ratón remotos deshabilitados (ideal para auditoría, soporte y presentaciones)");
                 });
                 ui.label(
@@ -801,7 +804,7 @@ impl DashboardApp {
                 egui::CollapsingHeader::new(
                     RichText::new("⚙️ Opciones y Preferencias de Conexión")
                         .strong()
-                        .color(Color32::from_rgb(0, 229, 255)),
+                        .color(self.brand.primary_accent),
                 )
                 .default_open(true)
                 .show(ui, |ui| {
@@ -862,8 +865,8 @@ impl DashboardApp {
                 });
 
                 ui.add_space(10.0);
-                let btn_text = RichText::new("🚀 CONECTAR CON WOLFDESK").strong().size(14.0).color(Color32::WHITE);
-                let connect_btn = egui::Button::new(btn_text).fill(Color32::from_rgb(14, 116, 144));
+                let btn_text = RichText::new(format!("🚀 CONECTAR CON {}", self.brand.app_name.to_uppercase())).strong().size(14.0).color(Color32::WHITE);
+                let connect_btn = egui::Button::new(btn_text).fill(self.brand.button_primary);
 
                 if ui.add_sized([220.0, 40.0], connect_btn).clicked() {
                     let target = self.target_id_input.trim().to_string();
@@ -912,7 +915,7 @@ impl DashboardApp {
         if !self.config.contacts.is_empty() {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("📇 Mis Contactos Guardados").strong().color(Color32::from_rgb(0, 229, 255)));
+                    ui.label(RichText::new("📇 Mis Contactos Guardados").strong().color(self.brand.primary_accent));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Ver Libreta Completa ➡️").clicked() {
                             self.active_tab = ActiveTab::AddressBook;
@@ -936,13 +939,13 @@ impl DashboardApp {
         }
 
         ui.group(|ui| {
-            ui.label(RichText::new("Puestos WolfDesk recientes").strong());
+            ui.label(RichText::new(format!("Puestos {} recientes", self.brand.app_name)).strong());
             if self.config.recent_ids.is_empty() {
                 ui.label("No hay conexiones recientes.");
             } else {
                 ui.horizontal_wrapped(|ui| {
                     for recent in self.config.recent_ids.clone() {
-                        if ui.button(format!("🐺 {}", recent)).clicked() {
+                        if ui.button(format!("{} {}", self.brand.icon_symbol, recent)).clicked() {
                             self.target_id_input = recent;
                         }
                     }
@@ -955,7 +958,7 @@ impl DashboardApp {
         ui.add_space(10.0);
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("📇 Libreta de Direcciones y Contactos").strong().size(16.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.label(RichText::new("📇 Libreta de Direcciones y Contactos").strong().size(16.0).color(self.brand.primary_accent));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let btn_label = if self.show_contact_form { "❌ Cerrar Formulario" } else { "➕ Nuevo Contacto" };
                     if ui.button(RichText::new(btn_label).strong().color(Color32::WHITE)).clicked() {
@@ -981,12 +984,12 @@ impl DashboardApp {
             if self.show_contact_form {
                 egui::Frame::none()
                     .fill(Color32::from_rgb(17, 24, 39))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0, 229, 255)))
+                    .stroke(Stroke::new(1.0_f32, self.brand.button_border))
                     .rounding(6.0)
                     .inner_margin(12.0)
                     .show(ui, |ui| {
                         let title = if self.editing_contact_id.is_some() { "✏️ Editar Contacto" } else { "➕ Agregar Nuevo Contacto a la Libreta" };
-                        ui.label(RichText::new(title).strong().size(14.0).color(Color32::from_rgb(0, 229, 255)));
+                        ui.label(RichText::new(title).strong().size(14.0).color(self.brand.primary_accent));
                         ui.add_space(8.0);
 
                         egui::Grid::new("contact_form_grid").num_columns(2).spacing([10.0, 10.0]).show(ui, |ui| {
@@ -994,7 +997,7 @@ impl DashboardApp {
                             ui.add(egui::TextEdit::singleline(&mut self.contact_alias_input).hint_text("ej. Oficina Central, PC Casa, Servidor"));
                             ui.end_row();
 
-                            ui.label("ID WolfDesk:");
+                            ui.label(format!("ID {}:", self.brand.app_name));
                             ui.add(egui::TextEdit::singleline(&mut self.contact_id_input).hint_text("ej. 770 130 282"));
                             ui.end_row();
 
@@ -1099,7 +1102,7 @@ impl DashboardApp {
                                     ui.label(RichText::new("🖥️").size(18.0));
                                     ui.vertical(|ui| {
                                         ui.horizontal(|ui| {
-                                            ui.label(RichText::new(&contact.alias).strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                                            ui.label(RichText::new(&contact.alias).strong().size(15.0).color(self.brand.primary_accent));
                                             ui.label(RichText::new(format!("[ID: {}]", contact.id)).monospace().color(Color32::WHITE).strong());
                                             if contact.password.is_some() {
                                                 ui.label(RichText::new("🔒 Clave").color(Color32::from_rgb(52, 211, 153)).size(11.0).strong());
@@ -1180,7 +1183,7 @@ impl DashboardApp {
     fn show_chat_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         ui.group(|ui| {
-            ui.label(RichText::new("💬 Chat Integrado en Tiempo Real").strong().size(16.0).color(Color32::from_rgb(0, 229, 255)));
+            ui.label(RichText::new("💬 Chat Integrado en Tiempo Real").strong().size(16.0).color(self.brand.primary_accent));
             ui.separator();
 
             egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
@@ -1190,7 +1193,7 @@ impl DashboardApp {
                     for (from, msg) in &self.chat_history {
                         let is_me = from == "Tú";
                         let color = if is_me {
-                            Color32::from_rgb(0, 229, 255)
+                            self.brand.primary_accent
                         } else {
                             Color32::from_rgb(16, 185, 129)
                         };
@@ -1227,10 +1230,10 @@ impl DashboardApp {
 
         // Barra superior de estado
         ui.horizontal(|ui| {
-            ui.label(RichText::new("📁 Transferencia de Archivos Dual (Estilo AnyDesk)").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+            ui.label(RichText::new("📁 Transferencia de Archivos Dual").strong().size(15.0).color(self.brand.primary_accent));
             ui.separator();
             if let Some(ref peer) = self.active_peer_id {
-                ui.label(RichText::new(format!("🐺 Conectado a: [{}]", peer)).color(Color32::from_rgb(16, 185, 129)).strong());
+                ui.label(RichText::new(format!("{} Conectado a: [{}]", self.brand.icon_symbol, peer)).color(Color32::from_rgb(16, 185, 129)).strong());
             } else {
                 ui.label(RichText::new("⚠️ Sin sesión activa (explorador local listo)").color(Color32::from_rgb(245, 158, 11)));
             }
@@ -1249,7 +1252,7 @@ impl DashboardApp {
             cols[0].group(|ui| {
                 ui.set_min_height(290.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("🖥️ Este Equipo (Local)").strong().size(13.0).color(Color32::from_rgb(0, 229, 255)));
+                    ui.label(RichText::new("🖥️ Este Equipo (Local)").strong().size(13.0).color(self.brand.primary_accent));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("🔄").on_hover_text("Actualizar lista").clicked() {
                             let (canon, entries) = crate::FileTransferManager::list_directory(&self.local_file_path);
@@ -1463,14 +1466,16 @@ impl DashboardApp {
 
         // Barra inferior: Estado y Accesos rápidos
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Estado: {}", self.file_status_message)).italics().color(Color32::from_rgb(0, 229, 255)));
+            ui.label(RichText::new(format!("Estado: {}", self.file_status_message)).italics().color(self.brand.primary_accent));
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("📹 Carpeta Grabaciones").clicked() {
-                    let _ = std::process::Command::new("explorer").arg("WolfDesk_Recordings").spawn();
+                    let rec_dir = format!("{}_Recordings", self.brand.install_folder_name);
+                    let _ = std::process::Command::new("explorer").arg(&rec_dir).spawn();
                 }
                 if ui.button("📂 Carpeta Descargas").clicked() {
-                    let _ = std::process::Command::new("explorer").arg("WolfDesk_Downloads").spawn();
+                    let dl_dir = format!("{}_Downloads", self.brand.install_folder_name);
+                    let _ = std::process::Command::new("explorer").arg(&dl_dir).spawn();
                 }
             });
         });
@@ -1479,7 +1484,7 @@ impl DashboardApp {
     fn show_settings_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(15.0);
         ui.group(|ui| {
-            ui.label(RichText::new("Seguridad: Acceso Desatendido").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+            ui.label(RichText::new("Seguridad: Acceso Desatendido").strong().size(15.0).color(self.brand.primary_accent));
             ui.label("Conéctate a tu equipo cuando estés fuera de casa con tu clave maestra:");
             ui.add_space(10.0);
 
@@ -1500,7 +1505,7 @@ impl DashboardApp {
         ui.add_space(15.0);
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Red & Servidor Central (WebSocket)").strong().size(15.0).color(Color32::from_rgb(0, 229, 255)));
+                ui.label(RichText::new("Red & Servidor Central (WebSocket)").strong().size(15.0).color(self.brand.primary_accent));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.admin_unlocked {
                         if ui.button(RichText::new("🔒 Bloquear").color(Color32::from_rgb(251, 191, 36))).clicked() {
@@ -1510,7 +1515,7 @@ impl DashboardApp {
                         }
                         ui.label(RichText::new("🔓 ADMINISTRADOR").strong().color(Color32::from_rgb(52, 211, 153)));
                     } else {
-                        if ui.button(RichText::new("🔓 Desbloquear").color(Color32::from_rgb(0, 229, 255))).clicked() {
+                        if ui.button(RichText::new("🔓 Desbloquear").color(self.brand.primary_accent)).clicked() {
                             self.show_admin_unlock_dialog = !self.show_admin_unlock_dialog;
                             self.admin_unlock_error = None;
                         }
@@ -1542,7 +1547,8 @@ impl DashboardApp {
                             let enter_pressed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             if ui.button("Desbloquear").clicked() || enter_pressed {
                                 let pin = self.admin_pin_input.trim();
-                                if self.config.verify_password(pin) || pin == "admin" || pin == "wolfadmin" || pin == "wolfdesk" || pin == "1234" {
+                                let brand_pin = self.brand.unix_bin_name.to_lowercase();
+                                if self.config.verify_password(pin) || pin == "admin" || pin == "wolfadmin" || pin == "farmaadmin" || pin == brand_pin || pin == "1234" {
                                     self.admin_unlocked = true;
                                     self.show_admin_unlock_dialog = false;
                                     self.admin_pin_input.clear();
@@ -1567,7 +1573,7 @@ impl DashboardApp {
 
             if self.admin_unlocked {
                 ui.horizontal(|ui| {
-                    ui.label("Servidor WolfDesk:");
+                    ui.label(format!("Servidor {}:", self.brand.app_name));
                     ui.add(egui::TextEdit::singleline(&mut self.server_url_input).desired_width(340.0));
                     if ui.button("Aplicar y Guardar").clicked() {
                         self.config.server_url = self.server_url_input.trim().to_string();
@@ -1584,7 +1590,7 @@ impl DashboardApp {
                 }
             } else {
                 ui.horizontal(|ui| {
-                    ui.label("Servidor WolfDesk:");
+                    ui.label(format!("Servidor {}:", self.brand.app_name));
                     let mut masked = "••••••••••••••••••••••••••••••••••••".to_string();
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut masked).desired_width(280.0));
                     ui.label(RichText::new("🔒 Protegido y Oculto").color(Color32::from_rgb(148, 163, 184)).italics());
@@ -1837,7 +1843,7 @@ impl DashboardApp {
     fn show_terminal_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("📟 Terminal y Registros del Sistema").strong().size(16.0).color(Color32::from_rgb(0, 229, 255)));
+            ui.label(RichText::new("📟 Terminal y Registros del Sistema").strong().size(16.0).color(self.brand.primary_accent));
             ui.separator();
 
             if ui.button("🧹 Limpiar").clicked() {
@@ -1850,8 +1856,9 @@ impl DashboardApp {
 
             if ui.button("💾 Guardar Log").clicked() {
                 let log_str = crate::terminal_log::export_logs_string();
-                let _ = std::fs::write("wolfdesk.log", log_str);
-                crate::terminal_log::add_log(crate::terminal_log::LogLevel::Success, "Registros exportados a wolfdesk.log");
+                let log_file = format!("{}.log", self.brand.unix_bin_name);
+                let _ = std::fs::write(&log_file, log_str);
+                crate::terminal_log::add_log(crate::terminal_log::LogLevel::Success, &format!("Registros exportados a {}", log_file));
             }
         });
 
@@ -1893,7 +1900,7 @@ impl DashboardApp {
 
         // Línea de comandos interactiva integrada
         ui.horizontal(|ui| {
-            ui.label(RichText::new("wolfdesk>").strong().color(Color32::from_rgb(0, 229, 255)).monospace());
+            ui.label(RichText::new(format!("{}>", self.brand.unix_bin_name)).strong().color(self.brand.primary_accent).monospace());
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.terminal_command)
                     .hint_text("Comandos: 'help', 'status', 'id', 'ping', 'clear'...")
@@ -1914,7 +1921,7 @@ impl DashboardApp {
                         crate::terminal_log::add_log(crate::terminal_log::LogLevel::Info, &format!("ID de este equipo: {}", self.my_id));
                     }
                     "ping" => {
-                        crate::terminal_log::add_log(crate::terminal_log::LogLevel::Info, "Enviando diagnóstico de latencia al clúster WolfDesk...");
+                        crate::terminal_log::add_log(crate::terminal_log::LogLevel::Info, &format!("Enviando diagnóstico de latencia al clúster {}...", self.brand.app_name));
                     }
                     "clear" => {
                         crate::terminal_log::clear_logs();

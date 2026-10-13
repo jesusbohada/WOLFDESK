@@ -110,5 +110,6 @@ pub fn init_terminal_logger() {
     static LOGGER: AppLogger = AppLogger;
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(log::LevelFilter::Info);
-    add_log(LogLevel::Success, "Consola y terminal WolfDesk inicializada correctamente.");
+    let brand = crate::get_brand();
+    add_log(LogLevel::Success, &format!("Consola y terminal {} inicializada correctamente.", brand.app_name));
 }
