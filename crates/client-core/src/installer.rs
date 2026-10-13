@@ -1,27 +1,29 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Comprueba si WolfDesk ya está instalado formalmente en el sistema
+/// Comprueba si la aplicación ya está instalada formalmente en el sistema
 pub fn is_installed() -> bool {
+    let brand = crate::get_brand();
+    let folder_lower = brand.install_folder_name.to_lowercase();
     if let Ok(current) = std::env::current_exe() {
         let path_str = current.to_string_lossy().to_lowercase();
         #[cfg(windows)]
         {
-            if path_str.contains("program files\\wolfdesk")
-                || path_str.contains("programs\\wolfdesk")
+            if path_str.contains(&format!("program files\\{}", folder_lower))
+                || path_str.contains(&format!("programs\\{}", folder_lower))
             {
                 return true;
             }
         }
         #[cfg(target_os = "linux")]
         {
-            if path_str.starts_with("/usr/") || path_str.starts_with("/opt/wolfdesk") {
+            if path_str.starts_with("/usr/") || path_str.starts_with(&format!("/opt/{}", folder_lower)) {
                 return true;
             }
         }
         #[cfg(target_os = "macos")]
         {
-            if path_str.contains("/applications/wolfdesk.app") {
+            if path_str.contains(&format!("/applications/{}.app", folder_lower)) {
                 return true;
             }
         }
@@ -31,41 +33,43 @@ pub fn is_installed() -> bool {
 
 /// Obtiene el directorio de instalación óptimo según el sistema y permisos
 pub fn get_install_dir() -> PathBuf {
+    let brand = crate::get_brand();
     #[cfg(windows)]
     {
         // 1. Si hay acceso a Program Files (administrador), preferimos instalación global
         if let Ok(prog_files) = std::env::var("ProgramFiles") {
-            let target = PathBuf::from(prog_files).join("WolfDesk");
+            let target = PathBuf::from(prog_files).join(brand.install_folder_name);
             if fs::create_dir_all(&target).is_ok() {
                 return target;
             }
         }
         // 2. Si no, instalamos en el directorio de programas locales del usuario (sin requerir UAC/Admin)
         if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-            return PathBuf::from(local_appdata).join("Programs").join("WolfDesk");
+            return PathBuf::from(local_appdata).join("Programs").join(brand.install_folder_name);
         }
-        PathBuf::from("C:\\WolfDesk")
+        PathBuf::from(format!("C:\\{}", brand.install_folder_name))
     }
 
     #[cfg(target_os = "linux")]
     {
-        PathBuf::from("/opt/wolfdesk")
+        PathBuf::from(format!("/opt/{}", brand.install_folder_name.to_lowercase()))
     }
 
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/Applications/WolfDesk.app/Contents/MacOS")
+        PathBuf::from(format!("/Applications/{}.app/Contents/MacOS", brand.install_folder_name))
     }
 }
 
-/// Ejecuta la instalación completa de WolfDesk en el sistema operativo
+/// Ejecuta la instalación completa en el sistema operativo
 pub fn install_to_system() -> Result<String, String> {
+    let brand = crate::get_brand();
     let current_exe = std::env::current_exe().map_err(|e| format!("Error al obtener ejecutable actual: {}", e))?;
     let install_dir = get_install_dir();
 
     fs::create_dir_all(&install_dir).map_err(|e| format!("Error al crear carpeta de instalación {:?}: {}", install_dir, e))?;
 
-    let exe_name = if cfg!(windows) { "wolfdesk.exe" } else { "wolfdesk" };
+    let exe_name = if cfg!(windows) { brand.exe_name } else { brand.unix_bin_name };
     let dest_exe = install_dir.join(exe_name);
 
     // Copiar el ejecutable a la carpeta de destino
@@ -84,10 +88,11 @@ pub fn install_to_system() -> Result<String, String> {
     }
 
     // Copiar assets si existen
-    if Path::new("assets/wolfdesk.png").exists() {
+    let asset_path = format!("assets/{}", brand.icon_asset_name);
+    if Path::new(&asset_path).exists() {
         let dest_assets = install_dir.join("assets");
         let _ = fs::create_dir_all(&dest_assets);
-        let _ = fs::copy("assets/wolfdesk.png", dest_assets.join("wolfdesk.png"));
+        let _ = fs::copy(&asset_path, dest_assets.join(brand.icon_asset_name));
     }
 
     #[cfg(windows)]
@@ -101,12 +106,16 @@ pub fn install_to_system() -> Result<String, String> {
         create_linux_desktop_entry(&dest_exe)?;
     }
 
-    log::info!("✅ WolfDesk instalado exitosamente en: {:?}", install_dir);
-    Ok(format!("WolfDesk se ha instalado exitosamente en: {}", install_dir.display()))
+    log::info!("✅ {} instalado exitosamente en: {:?}", brand.app_name, install_dir);
+    Ok(format!("{} se ha instalado exitosamente en: {}", brand.app_name, install_dir.display()))
 }
 
-/// Desinstala WolfDesk del sistema, eliminando accesos directos, registro y la identidad fija
+/// Desinstala la aplicación del sistema, eliminando accesos directos, registro y la identidad fija
 pub fn uninstall_from_system() -> Result<String, String> {
+    let brand = crate::get_brand();
+    #[cfg(target_os = "linux")]
+    let folder_lower = brand.install_folder_name.to_lowercase();
+
     #[cfg(windows)]
     {
         remove_windows_shortcuts()?;
@@ -115,42 +124,45 @@ pub fn uninstall_from_system() -> Result<String, String> {
 
     #[cfg(target_os = "linux")]
     {
-        let _ = fs::remove_file("/usr/share/applications/wolfdesk.desktop");
+        let _ = fs::remove_file(format!("/usr/share/applications/{}.desktop", folder_lower));
         if let Ok(home) = std::env::var("HOME") {
-            let user_desktop = PathBuf::from(home).join(".local/share/applications/wolfdesk.desktop");
+            let user_desktop = PathBuf::from(home).join(format!(".local/share/applications/{}.desktop", folder_lower));
             let _ = fs::remove_file(user_desktop);
         }
     }
 
-    // Eliminar la identidad persistente para que en una futura reinstalación se genere un ID nuevo
-    crate::identity_store::remove_identity_on_uninstall();
+    // Eliminar la identidad persistente de esta marca para que en una futura reinstalación se genere un ID nuevo
+    crate::identity_store::remove_identity_on_uninstall(brand.install_folder_name);
 
-    log::info!("🗑️ WolfDesk ha sido desinstalado del sistema.");
-    Ok("WolfDesk ha sido desinstalado correctamente del equipo.".to_string())
+    log::info!("🗑️ {} ha sido desinstalado del sistema.", brand.app_name);
+    Ok(format!("{} ha sido desinstalado correctamente del equipo.", brand.app_name))
 }
 
 #[cfg(windows)]
 fn create_windows_shortcuts(dest_exe: &Path) -> Result<(), String> {
     use std::process::Command;
 
+    let brand = crate::get_brand();
     let exe_path_str = dest_exe.to_string_lossy().to_string();
 
     let script = format!(
         r#"$WshShell = New-Object -ComObject WScript.Shell
 $DesktopPath = [Environment]::GetFolderPath('Desktop')
-$Shortcut = $WshShell.CreateShortcut("$DesktopPath\WolfDesk.lnk")
-$Shortcut.TargetPath = "{}"
-$Shortcut.IconLocation = "{},0"
-$Shortcut.Description = "WolfDesk Pro - Escritorio Remoto Seguro"
+$Shortcut = $WshShell.CreateShortcut("$DesktopPath\{brand_folder}.lnk")
+$Shortcut.TargetPath = "{exe}"
+$Shortcut.IconLocation = "{exe},0"
+$Shortcut.Description = "{app_name} - Escritorio Remoto Seguro"
 $Shortcut.Save()
 
 $StartMenuPath = [Environment]::GetFolderPath('Programs')
-$Shortcut2 = $WshShell.CreateShortcut("$StartMenuPath\WolfDesk.lnk")
-$Shortcut2.TargetPath = "{}"
-$Shortcut2.IconLocation = "{},0"
-$Shortcut2.Description = "WolfDesk Pro - Escritorio Remoto Seguro"
+$Shortcut2 = $WshShell.CreateShortcut("$StartMenuPath\{brand_folder}.lnk")
+$Shortcut2.TargetPath = "{exe}"
+$Shortcut2.IconLocation = "{exe},0"
+$Shortcut2.Description = "{app_name} - Escritorio Remoto Seguro"
 $Shortcut2.Save()"#,
-        exe_path_str, exe_path_str, exe_path_str, exe_path_str
+        brand_folder = brand.install_folder_name,
+        exe = exe_path_str,
+        app_name = brand.app_name,
     );
 
     let output = Command::new("powershell")
@@ -169,14 +181,18 @@ $Shortcut2.Save()"#,
 fn remove_windows_shortcuts() -> Result<(), String> {
     use std::process::Command;
 
-    let script = r#"$DesktopPath = [Environment]::GetFolderPath('Desktop')
-if (Test-Path "$DesktopPath\WolfDesk.lnk") { Remove-Item "$DesktopPath\WolfDesk.lnk" -Force }
+    let brand = crate::get_brand();
+    let script = format!(
+        r#"$DesktopPath = [Environment]::GetFolderPath('Desktop')
+if (Test-Path "$DesktopPath\{brand_folder}.lnk") {{ Remove-Item "$DesktopPath\{brand_folder}.lnk" -Force }}
 $StartMenuPath = [Environment]::GetFolderPath('Programs')
-if (Test-Path "$StartMenuPath\WolfDesk.lnk") { Remove-Item "$StartMenuPath\WolfDesk.lnk" -Force }
-"#;
+if (Test-Path "$StartMenuPath\{brand_folder}.lnk") {{ Remove-Item "$StartMenuPath\{brand_folder}.lnk" -Force }}
+"#,
+        brand_folder = brand.install_folder_name
+    );
 
     let _ = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
         .output();
 
     Ok(())
@@ -186,22 +202,28 @@ if (Test-Path "$StartMenuPath\WolfDesk.lnk") { Remove-Item "$StartMenuPath\WolfD
 fn register_windows_uninstaller(dest_exe: &Path, install_dir: &Path) -> Result<(), String> {
     use std::process::Command;
 
+    let brand = crate::get_brand();
     let exe_str = dest_exe.to_string_lossy().to_string();
     let dir_str = install_dir.to_string_lossy().to_string();
+    let publisher = if brand.is_farmadesk() { "Farmanorte" } else { "WolfDesk Software" };
 
     let script = format!(
-        r#"$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\WolfDesk"
+        r#"$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{brand_folder}"
 if (!(Test-Path $regPath)) {{ New-Item -Path $regPath -Force | Out-Null }}
-Set-ItemProperty -Path $regPath -Name "DisplayName" -Value "WolfDesk Pro - Escritorio Remoto"
-Set-ItemProperty -Path $regPath -Name "DisplayVersion" -Value "1.2.0"
-Set-ItemProperty -Path $regPath -Name "Publisher" -Value "WolfDesk Software"
-Set-ItemProperty -Path $regPath -Name "DisplayIcon" -Value "{},0"
-Set-ItemProperty -Path $regPath -Name "InstallLocation" -Value "{}"
-Set-ItemProperty -Path $regPath -Name "UninstallString" -Value '"{}" --uninstall'
+Set-ItemProperty -Path $regPath -Name "DisplayName" -Value "{app_name} - Escritorio Remoto"
+Set-ItemProperty -Path $regPath -Name "DisplayVersion" -Value "1.3.0"
+Set-ItemProperty -Path $regPath -Name "Publisher" -Value "{publisher}"
+Set-ItemProperty -Path $regPath -Name "DisplayIcon" -Value "{exe},0"
+Set-ItemProperty -Path $regPath -Name "InstallLocation" -Value "{install_dir}"
+Set-ItemProperty -Path $regPath -Name "UninstallString" -Value '"{exe}" --uninstall'
 Set-ItemProperty -Path $regPath -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty -Path $regPath -Name "NoRepair" -Value 1 -Type DWord
 "#,
-        exe_str, dir_str, exe_str
+        brand_folder = brand.install_folder_name,
+        app_name = brand.app_name,
+        publisher = publisher,
+        exe = exe_str,
+        install_dir = dir_str,
     );
 
     let _ = Command::new("powershell")
@@ -215,12 +237,16 @@ Set-ItemProperty -Path $regPath -Name "NoRepair" -Value 1 -Type DWord
 fn remove_windows_uninstaller() -> Result<(), String> {
     use std::process::Command;
 
-    let script = r#"$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\WolfDesk"
-if (Test-Path $regPath) { Remove-Item -Path $regPath -Recurse -Force }
-"#;
+    let brand = crate::get_brand();
+    let script = format!(
+        r#"$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{brand_folder}"
+if (Test-Path $regPath) {{ Remove-Item -Path $regPath -Recurse -Force }}
+"#,
+        brand_folder = brand.install_folder_name
+    );
 
     let _ = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
         .output();
 
     Ok(())

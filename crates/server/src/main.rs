@@ -11,6 +11,7 @@ struct Peer {
     #[allow(dead_code)]
     public_key: String,
     raw_id: String,
+    brand: String,
 }
 
 type Peers = Arc<RwLock<HashMap<String, Peer>>>;
@@ -50,15 +51,17 @@ async fn main() {
     let health_route = warp::path("health")
         .map(|| warp::reply::json(&serde_json::json!({
             "status": "online",
-            "service": "WolfDesk-Rendezvous",
-            "version": "1.2.0"
+            "service": "RemoteDesktop-Rendezvous",
+            "version": "1.3.0",
+            "brands": ["wolfdesk", "farmadesk"]
         })));
 
     let routes = ws_route.or(ws_root).or(health_route);
     let port = 9050;
 
     println!("============================================================");
-    println!(" 🐺 [Servidor de Señalización WolfDesk Activo v1.2]");
+    println!(" 🚀 [Servidor de Señalización Multi-Organización v1.3]");
+    println!(" Aislamiento de red activo: FarmaDesk (Farmanorte) & WolfDesk");
     println!(" Normalizador inteligente de IDs activo (con o sin espacios)");
     println!(" Escuchando conexiones WebSocket en ws://0.0.0.0:{}/ws", port);
     println!(" Endpoint de comprobación en http://localhost:{}/health", port);
@@ -82,6 +85,7 @@ async fn handle_client(ws: WebSocket, peers: Peers, sessions: Sessions) {
 
     let mut current_norm_id: Option<String> = None;
     let mut current_raw_id: Option<String> = None;
+    let mut current_brand: String = "wolfdesk".to_string();
 
     while let Some(result) = ws_rx.next().await {
         let msg = match result {
@@ -95,9 +99,11 @@ async fn handle_client(ws: WebSocket, peers: Peers, sessions: Sessions) {
         if let Ok(text) = msg.to_str() {
             let parsed: Result<SignalMessage, _> = serde_json::from_str(text);
             match parsed {
-                Ok(Register { client_id, public_key }) => {
+                Ok(Register { client_id, public_key, brand }) => {
+                    let client_brand = brand.unwrap_or_else(|| "wolfdesk".to_string()).to_lowercase();
+                    current_brand = client_brand.clone();
                     let norm = normalize_id(&client_id);
-                    println!("\n>> [WOLFDESK] Cliente registrado: ID='{}' (Normalizado: '{}')", client_id, norm);
+                    println!("\n>> [{}] Cliente registrado: ID='{}' (Normalizado: '{}')", client_brand.to_uppercase(), client_id, norm);
                     current_norm_id = Some(norm.clone());
                     current_raw_id = Some(client_id.clone());
 
@@ -105,6 +111,7 @@ async fn handle_client(ws: WebSocket, peers: Peers, sessions: Sessions) {
                         sender: tx.clone(),
                         public_key,
                         raw_id: client_id.clone(),
+                        brand: client_brand,
                     });
 
                     let resp = RegisterSuccess { assigned_id: client_id };
@@ -115,23 +122,39 @@ async fn handle_client(ws: WebSocket, peers: Peers, sessions: Sessions) {
                 Ok(ConnectRequest { target_id, password_hash, auth_signature }) => {
                     let from_raw = current_raw_id.clone().unwrap_or_else(|| "Desconocido".into());
                     let target_norm = normalize_id(&target_id);
+                    let sender_brand = current_brand.clone();
 
-                    println!(">> [WOLFDESK] Solicitud de sesión: De '{}' hacia '{}' (Buscar: '{}')", from_raw, target_id, target_norm);
+                    println!(">> [{}] Solicitud de sesión: De '{}' hacia '{}' (Buscar: '{}')", sender_brand.to_uppercase(), from_raw, target_id, target_norm);
 
                     let read_guard = peers.read().await;
                     if let Some(target_peer) = read_guard.get(&target_norm) {
-                        println!(">> [WOLFDESK] ¡Puesto destino encontrado! Enrutando solicitud a '{}'", target_peer.raw_id);
-                        let forward_msg = ConnectRequest {
-                            target_id: from_raw,
-                            password_hash,
-                            auth_signature,
-                        };
-                        let json = serde_json::to_string(&forward_msg).unwrap();
-                        let _ = target_peer.sender.send(Ok(Message::text(json)));
+                        // Verificación de aislamiento estricto por marca / organización
+                        if target_peer.brand != sender_brand {
+                            println!(">> [SEGURIDAD] Bloqueada conexión cruzada: {} ({}) intentó conectar a {} ({})",
+                                from_raw, sender_brand.to_uppercase(), target_peer.raw_id, target_peer.brand.to_uppercase());
+
+                            let target_org = if target_peer.brand == "farmadesk" { "Farmanorte (FarmaDesk)" } else { "WolfDesk" };
+                            let my_org = if sender_brand == "farmadesk" { "Farmanorte (FarmaDesk)" } else { "WolfDesk" };
+                            let err = Error {
+                                message: format!("Acceso restringido: El puesto [{}] pertenece a la red de {} y este equipo opera bajo {}. No se permiten conexiones cruzadas.", target_id, target_org, my_org),
+                            };
+                            let json = serde_json::to_string(&err).unwrap();
+                            let _ = tx.send(Ok(Message::text(json)));
+                        } else {
+                            println!(">> [{}] ¡Puesto destino encontrado! Enrutando solicitud a '{}'", sender_brand.to_uppercase(), target_peer.raw_id);
+                            let forward_msg = ConnectRequest {
+                                target_id: from_raw,
+                                password_hash,
+                                auth_signature,
+                            };
+                            let json = serde_json::to_string(&forward_msg).unwrap();
+                            let _ = target_peer.sender.send(Ok(Message::text(json)));
+                        }
                     } else {
-                        println!(">> [WOLFDESK] Destino '{}' no encontrado en peers activos: {:?}", target_norm, read_guard.keys().collect::<Vec<_>>());
+                        println!(">> [{}] Destino '{}' no encontrado en peers activos", sender_brand.to_uppercase(), target_norm);
+                        let app_name = if sender_brand == "farmadesk" { "FarmaDesk" } else { "WolfDesk" };
                         let err = Error {
-                            message: format!("El puesto WolfDesk [{}] no está en línea.", target_id),
+                            message: format!("El puesto {} [{}] no está en línea o no está conectado al servidor.", app_name, target_id),
                         };
                         let json = serde_json::to_string(&err).unwrap();
                         let _ = tx.send(Ok(Message::text(json)));
@@ -244,7 +267,7 @@ async fn handle_client(ws: WebSocket, peers: Peers, sessions: Sessions) {
 
     if let Some(norm) = current_norm_id {
         peers.write().await.remove(&norm);
-        println!(">> [WOLFDESK] Cliente desconectado: ID='{}'", current_raw_id.as_deref().unwrap_or(&norm));
+        println!(">> [{}] Cliente desconectado: ID='{}'", current_brand.to_uppercase(), current_raw_id.as_deref().unwrap_or(&norm));
 
         if let Some(peer_norm) = sessions.write().await.remove(&norm) {
             sessions.write().await.remove(&peer_norm);

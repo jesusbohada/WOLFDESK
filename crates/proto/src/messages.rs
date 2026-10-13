@@ -24,10 +24,12 @@ impl Default for SessionPermissions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum SignalMessage {
-    /// Registro de cliente con ID y clave pública
+    /// Registro de cliente con ID, clave pública y marca organizacional opcional (wolfdesk, farmadesk, etc.)
     Register {
         client_id: String,
         public_key: String,
+        #[serde(default)]
+        brand: Option<String>,
     },
     /// Confirmación de registro exitoso
     RegisterSuccess {
@@ -196,4 +198,45 @@ pub struct FileEntry {
     pub name: String,
     pub is_dir: bool,
     pub size_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_register_serialization_with_brand() {
+        let msg = SignalMessage::Register {
+            client_id: "123456789".to_string(),
+            public_key: "abcdef0123456789".to_string(),
+            brand: Some("farmadesk".to_string()),
+        };
+        let json = serde_json::to_string(&msg).expect("serialization failed");
+        assert!(json.contains("\"brand\":\"farmadesk\""));
+
+        let deserialized: SignalMessage = serde_json::from_str(&json).expect("deserialization failed");
+        match deserialized {
+            SignalMessage::Register { client_id, public_key, brand } => {
+                assert_eq!(client_id, "123456789");
+                assert_eq!(public_key, "abcdef0123456789");
+                assert_eq!(brand, Some("farmadesk".to_string()));
+            }
+            _ => panic!("Expected Register message"),
+        }
+    }
+
+    #[test]
+    fn test_register_backwards_compatibility_without_brand() {
+        // Simular un cliente legacy que no envía el campo "brand"
+        let legacy_json = r#"{"type":"Register","payload":{"client_id":"987654321","public_key":"feedbeef"}}"#;
+        let deserialized: SignalMessage = serde_json::from_str(legacy_json).expect("legacy deserialization failed");
+        match deserialized {
+            SignalMessage::Register { client_id, public_key, brand } => {
+                assert_eq!(client_id, "987654321");
+                assert_eq!(public_key, "feedbeef");
+                assert_eq!(brand, None);
+            }
+            _ => panic!("Expected Register message"),
+        }
+    }
 }
