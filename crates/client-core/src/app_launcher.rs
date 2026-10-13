@@ -435,6 +435,20 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                         UiToNet::CheckForUpdates => {
                             let tx_ui = tx_ui_notify_cmd.clone();
                             tokio::task::spawn_blocking(move || {
+                                if let Some(pending) = crate::updater::get_pending_restart_commit() {
+                                    let brand = crate::get_brand();
+                                    let _ = tx_ui.send(NetToUi::UpdateStatusChanged(
+                                        crate::UpdateStatus::Success {
+                                            message: format!(
+                                                "¡La actualización ({}) ya está instalada en disco! Reinicie {} para aplicarla.",
+                                                pending, brand.app_name
+                                            ),
+                                        },
+                                    ));
+                                    crate::tray::wake_ui();
+                                    return;
+                                }
+
                                 match crate::check_for_updates() {
                                     Ok(Some(remote_info)) => {
                                         let current_hash = crate::get_build_git_hash().trim().to_string();

@@ -97,7 +97,8 @@ fn main() {
     }
 
     // Exportar el hash corto del commit actual de Git a tiempo de compilación
-    let git_hash = std::env::var("WOLFDESK_BUILD_GIT_HASH")
+    let git_hash = std::env::var("FARMADESK_BUILD_GIT_HASH")
+        .or_else(|_| std::env::var("WOLFDESK_BUILD_GIT_HASH"))
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| {
@@ -111,12 +112,14 @@ fn main() {
         })
         .unwrap_or_else(|| "10eb531".to_string());
     println!("cargo:rustc-env=WOLFDESK_BUILD_GIT_HASH={}", git_hash);
+    println!("cargo:rustc-env=FARMADESK_BUILD_GIT_HASH={}", git_hash);
 
     if let Ok(out_dir) = std::env::var("OUT_DIR") {
         let _ = fs::write(Path::new(&out_dir).join("build_git_hash.txt"), &git_hash);
     }
 
     // Instrucciones a Cargo para re-ejecutar build.rs si cambian referencias de Git
+    println!("cargo:rerun-if-env-changed=FARMADESK_BUILD_GIT_HASH");
     println!("cargo:rerun-if-env-changed=WOLFDESK_BUILD_GIT_HASH");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/index");
