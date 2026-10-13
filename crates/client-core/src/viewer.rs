@@ -199,15 +199,8 @@ fn draw_button(
         } else {
             (0x450A0A, 0x7F1D1D, 0xFCA5A5)
         }
-    } else if accent_color == 0xF59E0B || accent_color == 0xEAB308 {
-        // Alerta de reconexión / Advertencia
-        if is_hovered {
-            (0x452E0B, 0xFBBF24, 0xFFFFFF)
-        } else {
-            (0x2E1F05, 0xF59E0B, 0xFDE68A)
-        }
-    } else if accent_color == 0x0EA5E9 || accent_color == 0x0284C7 || accent_color == 0x00E5FF {
-        // Modo espectador / Archivos / Información
+    } else if accent_color == 0x0EA5E9 || accent_color == 0x0284C7 || accent_color == 0x00E5FF || accent_color == 0xF59E0B {
+        // Modo espectador / Archivos / Información / Reconexión
         if is_hovered {
             (0x0C4A6E, 0x38BDF8, 0xFFFFFF)
         } else {
@@ -977,7 +970,7 @@ pub fn start_viewer_window(
             let bh = 28;
             let bx = if client_w > bw { (client_w - bw) / 2 } else { 10 };
             let by = TOOLBAR_HEIGHT + 8;
-            draw_button(&mut buffer, client_w, client_h, (bx, by, bw, bh), &banner_txt, false, false, 0xF59E0B);
+            draw_button(&mut buffer, client_w, client_h, (bx, by, bw, bh), &banner_txt, false, false, 0x0EA5E9);
         }
 
         // 11. Eventos de teclado minifb (activo si el hook nativo no está disponible o en Linux)

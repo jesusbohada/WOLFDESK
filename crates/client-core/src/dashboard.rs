@@ -164,6 +164,8 @@ pub struct DashboardApp {
     pub saved_fps_limit: u32,
     pub remote_session_state: RemoteSessionState,
     pub last_tick: std::time::Instant,
+    pub logo_texture: Option<egui::TextureHandle>,
+    pub title_bar_themed: bool,
 
     // Canales de comunicación con el motor de red
     pub tx_to_net: tokio::sync::mpsc::UnboundedSender<UiToNet>,
@@ -238,6 +240,8 @@ impl DashboardApp {
             saved_view_only: false,
             remote_session_state: RemoteSessionState::Idle,
             last_tick: std::time::Instant::now(),
+            logo_texture: None,
+            title_bar_themed: false,
             tx_to_net,
             rx_from_net,
         }
@@ -247,6 +251,17 @@ impl DashboardApp {
 impl eframe::App for DashboardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
+
+        if !self.title_bar_themed {
+            self.title_bar_themed = true;
+            let is_farmadesk = self.brand.is_farmadesk();
+            crate::app_launcher::apply_windows_title_bar_theme(&self.brand.window_title, is_farmadesk);
+        }
+
+        if self.logo_texture.is_none() {
+            let img = crate::app_launcher::get_app_logo_image();
+            self.logo_texture = Some(ctx.load_texture("app_logo", img, egui::TextureOptions::LINEAR));
+        }
 
         let dt = self.last_tick.elapsed().as_secs_f32().min(1.0);
         self.last_tick = std::time::Instant::now();
@@ -543,7 +558,11 @@ impl eframe::App for DashboardApp {
             ui.add_space(10.0);
             let brand = crate::get_brand();
             ui.horizontal(|ui| {
-                ui.label(RichText::new(brand.icon_symbol).size(24.0));
+                if let Some(ref logo) = self.logo_texture {
+                    ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(26.0, 26.0)));
+                } else {
+                    ui.label(RichText::new(brand.icon_symbol).size(24.0));
+                }
                 ui.heading(
                     RichText::new(brand.app_name)
                         .strong()
@@ -557,7 +576,7 @@ impl eframe::App for DashboardApp {
                         crate::restart_application();
                     }
                 } else if let crate::updater::UpdateStatus::UpdateAvailable { ref latest_commit, .. } = self.update_status {
-                    if ui.button(RichText::new(format!("⚡ Actualizar ({})", latest_commit)).strong().color(Color32::from_rgb(250, 204, 21))).clicked() {
+                    if ui.button(RichText::new(format!("⚡ Actualizar ({})", latest_commit)).strong().color(brand.primary_accent)).clicked() {
                         self.active_tab = ActiveTab::Settings;
                     }
                 }
@@ -629,19 +648,19 @@ impl DashboardApp {
         match session_state_copy {
             RemoteSessionState::Reconnecting { target_id, attempt, max_attempts, countdown } => {
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(30, 27, 75))
-                    .stroke(Stroke::new(1.5_f32, Color32::from_rgb(250, 204, 21)))
+                    .fill(Color32::from_rgb(15, 30, 60))
+                    .stroke(Stroke::new(1.5_f32, self.brand.primary_accent))
                     .rounding(8.0)
                     .inner_margin(12.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("⚠️").size(22.0));
+                            ui.label(RichText::new("🔄").size(22.0));
                             ui.vertical(|ui| {
                                 ui.label(
                                     RichText::new(format!("CONEXIÓN PERDIDA CON [{}]", target_id))
                                         .strong()
                                         .size(14.0)
-                                        .color(Color32::from_rgb(250, 204, 21)),
+                                        .color(self.brand.primary_accent),
                                 );
                                 ui.label(
                                     RichText::new(format!(
@@ -1244,7 +1263,7 @@ impl DashboardApp {
             if let Some(ref peer) = self.active_peer_id {
                 ui.label(RichText::new(format!("{} Conectado a: [{}]", self.brand.icon_symbol, peer)).color(Color32::from_rgb(16, 185, 129)).strong());
             } else {
-                ui.label(RichText::new("⚠️ Sin sesión activa (explorador local listo)").color(Color32::from_rgb(245, 158, 11)));
+                ui.label(RichText::new("ℹ️ Sin sesión activa (explorador local listo)").color(Color32::from_rgb(148, 163, 184)));
             }
         });
 
@@ -1298,7 +1317,7 @@ impl DashboardApp {
                     for entry in &self.local_file_entries {
                         let is_selected = self.selected_local_file.as_deref() == Some(&entry.name);
                         if entry.is_dir {
-                            if ui.button(RichText::new(format!("📁 {}/", entry.name)).color(Color32::from_rgb(250, 204, 21))).clicked() {
+                            if ui.button(RichText::new(format!("📁 {}/", entry.name)).color(self.brand.primary_accent)).clicked() {
                                 let p = std::path::Path::new(&self.local_file_path).join(&entry.name);
                                 next_local_path = Some(p.to_string_lossy().to_string());
                             }
@@ -1405,7 +1424,7 @@ impl DashboardApp {
                         for entry in &self.remote_file_entries {
                             let is_selected = self.selected_remote_file.as_deref() == Some(&entry.name);
                             if entry.is_dir {
-                                if ui.button(RichText::new(format!("📁 {}/", entry.name)).color(Color32::from_rgb(250, 204, 21))).clicked() {
+                                if ui.button(RichText::new(format!("📁 {}/", entry.name)).color(self.brand.primary_accent)).clicked() {
                                     let p = std::path::Path::new(&self.remote_file_path).join(&entry.name);
                                     next_remote_path = Some(p.to_string_lossy().to_string());
                                 }
@@ -1517,7 +1536,7 @@ impl DashboardApp {
                 ui.label(RichText::new("Red & Servidor Central (WebSocket)").strong().size(15.0).color(self.brand.primary_accent));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.admin_unlocked {
-                        if ui.button(RichText::new("🔒 Bloquear").color(Color32::from_rgb(251, 191, 36))).clicked() {
+                        if ui.button(RichText::new("🔒 Bloquear").color(self.brand.primary_accent)).clicked() {
                             self.admin_unlocked = false;
                             self.admin_pin_input.clear();
                             self.admin_unlock_error = None;
@@ -1681,12 +1700,12 @@ impl DashboardApp {
                             });
                         } else {
                             egui::Frame::none()
-                                .fill(Color32::from_rgb(30, 27, 20))
-                                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(250, 204, 21)))
+                                .fill(Color32::from_rgb(15, 30, 60))
+                                .stroke(Stroke::new(1.0_f32, brand.primary_accent))
                                 .rounding(4.0)
                                 .inner_margin(10.0)
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new("⚡ ¡NUEVA VERSIÓN DETECTADA EN GITHUB!").strong().color(Color32::from_rgb(250, 204, 21)).size(14.0));
+                                    ui.label(RichText::new("⚡ ¡NUEVA VERSIÓN DETECTADA EN GITHUB!").strong().color(brand.primary_accent).size(14.0));
                                     ui.label(format!("• Versión actual instalada: {}", current_commit));
                                     ui.label(format!("• Nueva versión disponible: {} ({})", latest_commit, date));
                                     ui.label(RichText::new(format!("• Novedades: {}", commit_message)).italics().color(Color32::from_rgb(226, 232, 240)));
@@ -1790,7 +1809,7 @@ impl DashboardApp {
                 if self.is_installed {
                     ui.label(RichText::new("🟢 Instalado Formalmente").color(Color32::from_rgb(16, 185, 129)).strong());
                 } else {
-                    ui.label(RichText::new("🟡 Ejecutable Portátil").color(Color32::from_rgb(251, 191, 36)).strong());
+                    ui.label(RichText::new("📦 Ejecutable Portátil").color(Color32::from_rgb(56, 189, 248)).strong());
                 }
             });
             ui.label(format!("ID criptográfico fijo del puesto: {}", self.my_id));
@@ -1846,7 +1865,7 @@ impl DashboardApp {
 
                 if self.is_restarting {
                     ui.spinner();
-                    ui.label(RichText::new("Reiniciando servicio...").color(Color32::from_rgb(250, 204, 21)).strong());
+                    ui.label(RichText::new("Reiniciando servicio...").color(brand.primary_accent).strong());
                 }
             });
 
@@ -1854,11 +1873,11 @@ impl DashboardApp {
                 ui.add_space(8.0);
                 egui::Frame::none()
                     .fill(Color32::from_rgb(24, 30, 42))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(250, 204, 21)))
+                    .stroke(Stroke::new(1.0_f32, brand.primary_accent))
                     .rounding(4.0)
                     .inner_margin(10.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new(format!("⚠️ ¿Deseas reiniciar completamente el servicio de {}?", brand.app_name)).strong().color(Color32::from_rgb(250, 204, 21)));
+                        ui.label(RichText::new(format!("🔄 ¿Deseas reiniciar completamente el servicio de {}?", brand.app_name)).strong().color(brand.primary_accent));
                         ui.label("La aplicación se cerrará y volverá a levantarse automáticamente en 1 segundo con todos los subsistemas restablecidos.");
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
@@ -1949,7 +1968,7 @@ impl DashboardApp {
                                     ui.label(RichText::new(format!("[{}]", entry.timestamp)).color(Color32::from_rgb(100, 116, 139)).monospace());
                                     let badge_color = match entry.level {
                                         crate::terminal_log::LogLevel::Info => Color32::from_rgb(56, 189, 248),
-                                        crate::terminal_log::LogLevel::Warn => Color32::from_rgb(251, 191, 36),
+                                        crate::terminal_log::LogLevel::Warn => Color32::from_rgb(148, 163, 184),
                                         crate::terminal_log::LogLevel::Error => Color32::from_rgb(239, 68, 68),
                                         crate::terminal_log::LogLevel::Success => Color32::from_rgb(52, 211, 153),
                                     };

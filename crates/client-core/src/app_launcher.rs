@@ -29,6 +29,75 @@ fn load_app_icon() -> Option<egui::IconData> {
     })
 }
 
+pub fn get_app_logo_image() -> egui::ColorImage {
+    let brand = crate::get_brand();
+    let bytes: &[u8] = if brand.is_farmadesk() {
+        include_bytes!("../assets/farmadesk.png")
+    } else {
+        include_bytes!("../assets/wolfdesk.png")
+    };
+    if let Ok(img) = image::load_from_memory(bytes) {
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        egui::ColorImage::from_rgba_unmultiplied(
+            [width as usize, height as usize],
+            &rgba.into_raw(),
+        )
+    } else {
+        egui::ColorImage::example()
+    }
+}
+
+#[cfg(windows)]
+pub fn apply_windows_title_bar_theme(window_title: &str, is_farmadesk: bool) {
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+    use windows::core::PCWSTR;
+
+    let title_wide: Vec<u16> = window_title.encode_utf16().chain(std::iter::once(0)).collect();
+    let hwnd = unsafe { FindWindowW(None, PCWSTR(title_wide.as_ptr())) };
+    if hwnd.0 != 0 {
+        unsafe {
+            let dark_mode: i32 = 1;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &dark_mode as *const _ as *const _,
+                std::mem::size_of::<i32>() as u32,
+            );
+
+            // Formato COLORREF 0x00BBGGRR:
+            // FarmaDesk: Azul Corporativo Oficial #002266 -> B:102 (0x66), G:34 (0x22), R:0 -> 0x00662200
+            // WolfDesk: Azul Noche Profundo -> 0x002B130B
+            let caption_color: u32 = if is_farmadesk {
+                0x00662200
+            } else {
+                0x002B130B
+            };
+
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_CAPTION_COLOR,
+                &caption_color as *const _ as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+
+            let text_color: u32 = 0x00FFFFFF;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_TEXT_COLOR,
+                &text_color as *const _ as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn apply_windows_title_bar_theme(_window_title: &str, _is_farmadesk: bool) {}
+
 pub fn run_desktop_app() -> Result<(), eframe::Error> {
     let brand = crate::get_brand();
 
@@ -145,6 +214,18 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
 
     // Iniciar el icono de bandeja del sistema (segundo plano permanente junto al reloj)
     crate::tray::start_system_tray(&my_id, tx_to_ui.clone());
+
+    #[cfg(windows)]
+    {
+        let win_title = brand.window_title.to_string();
+        let is_farmadesk = brand.is_farmadesk();
+        std::thread::spawn(move || {
+            for _ in 0..15 {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                apply_windows_title_bar_theme(&win_title, is_farmadesk);
+            }
+        });
+    }
 
     // Escuchar solicitudes de mostrar ventana desde instancias secundarias
     if let Ok(listener) = std::net::UdpSocket::bind(format!("127.0.0.1:{}", single_instance_port)) {
