@@ -24,7 +24,7 @@ impl Identity {
         }
     }
 
-    /// Deriva un ID amigable de 9 dígitos (estilo AnyDesk: XXX XXX XXX)
+    /// Deriva un ID numérico amigable y seguro de 9 dígitos (formato: XXX XXX XXX)
     /// a partir del hash SHA-256 de la clave pública del host.
     pub fn derive_numeric_id(verifying_key: &VerifyingKey) -> String {
         let mut hasher = Sha256::new();

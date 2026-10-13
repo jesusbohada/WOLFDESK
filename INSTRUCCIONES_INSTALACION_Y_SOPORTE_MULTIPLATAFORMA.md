@@ -16,7 +16,7 @@ WolfDesk Pro ha sido diseñado con arquitectura multiplataforma en **Rust**, per
 
 ## 2. Identificador Fijo y Permanente por Equipo (Ed25519)
 * **¿Cómo funciona el ID fijo?**
-  * En la primera ejecución o instalación, WolfDesk genera un par de claves criptográficas seguras **Ed25519** y deriva un identificador numérico único de 9 dígitos (estilo AnyDesk: `XXX XXX XXX`).
+  * En la primera ejecución o instalación, la aplicación genera un par de claves criptográficas seguras **Ed25519** y deriva un identificador numérico único de 9 dígitos (formato: `XXX XXX XXX`).
   * Esta identidad se guarda de forma persistente en:
     * **Windows:** `%ProgramData%\WolfDesk\identity.json` (o `%AppData%\WolfDesk\identity.json`).
     * **Linux:** `/etc/wolfdesk/identity.json` (o `~/.config/wolfdesk/identity.json`).

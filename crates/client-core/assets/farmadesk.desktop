@@ -1,0 +1,18 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=FarmaDesk Pro
+GenericName=Escritorio Remoto Farmanorte
+Comment=Software de escritorio remoto seguro y de alto rendimiento para Farmanorte
+Exec=farmadesk %u
+Icon=farmadesk
+Terminal=false
+Categories=Network;RemoteAccess;Utility;
+Keywords=remote;desktop;farmanorte;farmadesk;soporte;
+StartupWMClass=farmadesk
+MimeType=x-scheme-handler/farmadesk;
+Actions=NewConnection;
+
+[Desktop Action NewConnection]
+Name=Nueva Conexión FarmaDesk
+Exec=farmadesk

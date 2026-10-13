@@ -555,8 +555,9 @@ pub fn start_viewer_window(
         let _ = control_tx.send(ControlEvent::SetFpsLimit { fps: initial_fps_limit });
     }
 
+    let brand = crate::get_brand();
     println!("\n============================================================");
-    println!(" 🐺 [VISOR WOLFDESK HD - RENDIMIENTO TOTAL]");
+    println!(" {} [VISOR {} HD - RENDIMIENTO TOTAL]", brand.icon_symbol, brand.app_name.to_uppercase());
     println!(" • Barra superior interactiva disponible:");
     println!("   [Calidad], [Escala], [Grabar], [Win Key], [Ocultar], [Salir]");
     println!(" • Atajos de teclado: [F1-F4 Calidad], [F5 Escala], [F9 Grabar]");
@@ -831,11 +832,12 @@ pub fn start_viewer_window(
                     let _ = tx_to_ui.send(crate::dashboard::NetToUi::OpenFileTransfer);
                     #[cfg(windows)]
                     unsafe {
-                        use windows::core::w;
                         use windows::Win32::UI::WindowsAndMessaging::{
                             FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
                         };
-                        let hwnd = FindWindowW(None, w!("WolfDesk Pro - Escritorio Remoto"));
+                        let brand = crate::get_brand();
+                        let title_wide: Vec<u16> = brand.window_title.encode_utf16().chain(std::iter::once(0)).collect();
+                        let hwnd = FindWindowW(None, windows::core::PCWSTR(title_wide.as_ptr()));
                         if hwnd.0 != 0 {
                             let _ = ShowWindow(hwnd, SW_SHOW);
                             let _ = ShowWindow(hwnd, SW_RESTORE);

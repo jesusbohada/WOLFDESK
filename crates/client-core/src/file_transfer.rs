@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 const CHUNK_SIZE: usize = 64 * 1024; // 64 KB por bloque
-const DOWNLOADS_DIR: &str = "WolfDesk_Downloads";
+
+pub fn get_downloads_dir() -> PathBuf {
+    PathBuf::from(format!("{}_Downloads", crate::get_brand().install_folder_name))
+}
 
 pub struct IncomingFile {
     pub file_name: String,
@@ -22,7 +25,7 @@ pub struct FileTransferManager {
 
 impl FileTransferManager {
     pub fn new() -> Self {
-        let _ = fs::create_dir_all(DOWNLOADS_DIR);
+        let _ = fs::create_dir_all(get_downloads_dir());
         Self {
             incoming: HashMap::new(),
         }
@@ -109,10 +112,10 @@ impl FileTransferManager {
         }
     }
 
-    /// Reensambla el archivo completo y lo guarda en WolfDesk_Downloads
+    /// Reensambla el archivo completo y lo guarda en la carpeta de Descargas de la marca
     pub fn handle_complete(&mut self, file_name: &str) -> Option<PathBuf> {
         if let Some(incoming) = self.incoming.remove(file_name) {
-            let output_path = Path::new(DOWNLOADS_DIR).join(&incoming.file_name);
+            let output_path = get_downloads_dir().join(&incoming.file_name);
             if let Ok(mut out_file) = File::create(&output_path) {
                 for i in 0..incoming.total_chunks {
                     if let Some(data) = incoming.chunks.get(&i) {

@@ -1,9 +1,11 @@
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
-const RECORDINGS_DIR: &str = "WolfDesk_Recordings";
+pub fn get_recordings_dir() -> PathBuf {
+    PathBuf::from(format!("{}_Recordings", crate::get_brand().install_folder_name))
+}
 
 pub struct SessionRecorder {
     pub is_recording: bool,
@@ -14,7 +16,7 @@ pub struct SessionRecorder {
 
 impl SessionRecorder {
     pub fn new() -> Self {
-        let _ = fs::create_dir_all(RECORDINGS_DIR);
+        let _ = fs::create_dir_all(get_recordings_dir());
         Self {
             is_recording: false,
             current_dir: None,
@@ -27,7 +29,7 @@ impl SessionRecorder {
     pub fn start(&mut self, session_title: &str) -> PathBuf {
         let timestamp = chrono_timestamp();
         let folder_name = format!("grabacion_{}_{}", session_title.replace(' ', "_"), timestamp);
-        let folder_path = Path::new(RECORDINGS_DIR).join(folder_name);
+        let folder_path = get_recordings_dir().join(folder_name);
         let _ = fs::create_dir_all(&folder_path);
 
         self.current_dir = Some(folder_path.clone());
@@ -68,7 +70,7 @@ impl SessionRecorder {
         if let Some(ref dir) = self.current_dir {
             let info_path = dir.join("info_sesion.txt");
             if let Ok(mut f) = File::create(&info_path) {
-                let _ = writeln!(f, "=== INFORME DE SESIÓN WOLFDESK ===");
+                let _ = writeln!(f, "=== INFORME DE SESIÓN {} ===", crate::get_brand().app_name.to_uppercase());
                 let _ = writeln!(f, "Total de fotogramas guardados: {}", total_frames);
                 let _ = writeln!(f, "Duración total: {} segundos", elapsed_secs);
                 let _ = writeln!(f, "FPS promedio: {:.1}", if elapsed_secs > 0 { total_frames as f64 / elapsed_secs as f64 } else { 0.0 });
