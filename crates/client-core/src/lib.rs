@@ -81,23 +81,40 @@ pub fn restart_application() {
             let parent_dir = exe.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
 
             let current_pid = std::process::id();
-            // Usar ping 127.0.0.1 -n 2 para una pausa no bloqueante de 1s (timeout falla sin consola adjunta).
-            // Si el proceso actual no cerró limpiamente tras 1s, se asegura matando únicamente su PID (sin /T).
-            // Luego lanza el nuevo ejecutable completamente desvinculado.
-            let batch_cmd = if !parent_dir.is_empty() {
-                format!(
-                    "ping 127.0.0.1 -n 2 >nul & taskkill /F /PID {} >nul 2>&1 & cd /d \"{}\" & start \"\" \"{}\"",
-                    current_pid, parent_dir, exe_str
-                )
-            } else {
-                format!(
-                    "ping 127.0.0.1 -n 2 >nul & taskkill /F /PID {} >nul 2>&1 & start \"\" \"{}\"",
-                    current_pid, exe_str
-                )
-            };
 
+            // 1. Crear un script .bat dedicado en %TEMP% para ejecución limpia sin problemas de comillas anidadas en cmd /C
+            let bat_content = format!(
+                "@echo off\r\n\
+                 ping 127.0.0.1 -n 2 >nul\r\n\
+                 taskkill /F /PID {} >nul 2>&1\r\n\
+                 ping 127.0.0.1 -n 2 >nul\r\n\
+                 cd /d \"{}\"\r\n\
+                 start \"\" \"{}\"\r\n\
+                 exit\r\n",
+                current_pid, parent_dir, exe_str
+            );
+            let temp_bat = std::env::temp_dir().join(format!("restart_{}.bat", brand.brand_id));
+            let _ = std::fs::write(&temp_bat, bat_content);
+
+            // 2. Disparar el reinicio mediante cmd ejecutando el archivo por lotes
             let _ = std::process::Command::new("cmd")
-                .args(["/C", &batch_cmd])
+                .args(["/C", &temp_bat.to_string_lossy()])
+                .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                .spawn();
+
+            // 3. Respaldo secundario mediante PowerShell para garantizar el levantamiento desvinculado
+            let ps_script = format!(
+                "Start-Sleep -Milliseconds 800; \
+                 Wait-Process -Id {} -Timeout 3 -ErrorAction SilentlyContinue; \
+                 Stop-Process -Id {} -Force -ErrorAction SilentlyContinue; \
+                 Start-Sleep -Milliseconds 400; \
+                 Start-Process -FilePath '{}' -WorkingDirectory '{}'",
+                current_pid, current_pid,
+                exe_str.replace('\'', "''"),
+                parent_dir.replace('\'', "''")
+            );
+            let _ = std::process::Command::new("powershell")
+                .args(["-WindowStyle", "Hidden", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps_script])
                 .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
                 .spawn();
         }

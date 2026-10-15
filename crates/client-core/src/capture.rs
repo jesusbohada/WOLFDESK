@@ -237,6 +237,8 @@ impl ScreenCapturer {
     /// Actualiza la lista de monitores y calcula las dimensiones y desplazamientos exactos
     pub fn update_bounds(&mut self) {
         self.monitors = enumerate_monitors();
+        let mut calculated = false;
+
         if self.selected_display == 0 {
             // Modo "Todas las pantallas" (Virtual Screen)
             #[cfg(windows)]
@@ -250,7 +252,7 @@ impl ScreenCapturer {
                     self.capture_y = vy;
                     self.screen_w = vw;
                     self.screen_h = vh;
-                    return;
+                    calculated = true;
                 }
             }
         } else if let Some(mon) = self.monitors.iter().find(|m| m.id == self.selected_display) {
@@ -258,20 +260,40 @@ impl ScreenCapturer {
             self.capture_y = mon.y;
             self.screen_w = mon.width;
             self.screen_h = mon.height;
-            return;
+            calculated = true;
         }
 
-        if let Some(first) = self.monitors.first() {
-            self.capture_x = first.x;
-            self.capture_y = first.y;
-            self.screen_w = first.width;
-            self.screen_h = first.height;
-        } else {
-            self.capture_x = 0;
-            self.capture_y = 0;
-            self.screen_w = 1920;
-            self.screen_h = 1080;
+        if !calculated {
+            if let Some(first) = self.monitors.first() {
+                self.capture_x = first.x;
+                self.capture_y = first.y;
+                self.screen_w = first.width;
+                self.screen_h = first.height;
+            } else {
+                self.capture_x = 0;
+                self.capture_y = 0;
+                self.screen_w = 1920;
+                self.screen_h = 1080;
+            }
         }
+
+        // Sincronizar inmediatamente los límites del monitor con el subsistema de inyección de mouse
+        crate::set_active_capture_bounds(
+            self.capture_x,
+            self.capture_y,
+            self.screen_w,
+            self.screen_h,
+        );
+    }
+
+    /// Retorna el número total de monitores detectados
+    pub fn get_monitors_count(&self) -> u8 {
+        self.monitors.len() as u8
+    }
+
+    /// Retorna los nombres de los monitores detectados
+    pub fn get_monitor_names(&self) -> Vec<String> {
+        self.monitors.iter().map(|m| m.name.clone()).collect()
     }
 
     /// Captura un fotograma completo sin rotura de líneas (usando GetDIBits) y con escala adaptativa

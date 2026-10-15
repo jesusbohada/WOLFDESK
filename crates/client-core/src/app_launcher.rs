@@ -263,8 +263,8 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
     // Canal para transmitir eventos de mouse/teclado y calidad desde la ventana del visor
     let (viewer_control_tx, mut viewer_control_rx) = mpsc::unbounded_channel::<ControlEvent>();
 
-    // Canal síncrono para enviar fotogramas de video recibidos a la ventana del visor
-    let viewer_frame_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>> = Arc::new(Mutex::new(None));
+    // Canal síncrono para enviar fotogramas de video y eventos recibidos a la ventana del visor
+    let viewer_frame_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<crate::viewer::ViewerMessage>>>> = Arc::new(Mutex::new(None));
 
     // Estado de la sesión remota activa
     let active_controller_id: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
@@ -281,7 +281,7 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
     let active_client_fps_limit: Arc<RwLock<u32>> = Arc::new(RwLock::new(0));
 
     // Configuración activa del Host (pantalla seleccionada y límite de framerate)
-    let active_host_display: Arc<RwLock<u8>> = Arc::new(RwLock::new(0));
+    let active_host_display: Arc<RwLock<u8>> = Arc::new(RwLock::new(1)); // Pantalla 1 por defecto
     let active_host_fps_limit: Arc<RwLock<u32>> = Arc::new(RwLock::new(0));
 
     // Gestor de transferencia de archivos
@@ -325,6 +325,7 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
             tokio::spawn(async move {
                 use base64::Engine;
                 let mut capturer = ScreenCapturer::new();
+                let mut last_controller_sent_monitors: Option<String> = None;
 
                 loop {
                     // Control dinámico de framerate / ancho de banda
@@ -339,6 +340,19 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
 
                     let maybe_controller = active_controller_for_capture.read().await.clone();
                     if let Some(target) = maybe_controller {
+                        // Notificar al visor sobre los monitores disponibles en este equipo al iniciar streaming
+                        if last_controller_sent_monitors.as_ref() != Some(&target) {
+                            last_controller_sent_monitors = Some(target.clone());
+                            let _ = tx_for_capture.send(SignalMessage::Control {
+                                target_id: target.clone(),
+                                event: ControlEvent::MonitorsInfo {
+                                    total_displays: capturer.get_monitors_count(),
+                                    active_display: capturer.selected_display,
+                                    names: capturer.get_monitor_names(),
+                                },
+                            });
+                        }
+
                         // Sincronizar selección de pantalla en el Host
                         let desired_display = *display_for_capture.read().await;
                         if capturer.selected_display != desired_display {
@@ -352,6 +366,15 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                                     capturer.screen_h,
                                 );
                             }
+                            // Enviar confirmación actualizada de monitores al visor
+                            let _ = tx_for_capture.send(SignalMessage::Control {
+                                target_id: target.clone(),
+                                event: ControlEvent::MonitorsInfo {
+                                    total_displays: capturer.get_monitors_count(),
+                                    active_display: capturer.selected_display,
+                                    names: capturer.get_monitor_names(),
+                                },
+                            });
                         }
 
                         let current_q = *quality_for_capture.read().await;
@@ -376,6 +399,8 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                                 }
                             }
                         }
+                    } else {
+                        last_controller_sent_monitors = None;
                     }
                 }
             });
@@ -448,9 +473,10 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
 
                         UiToNet::DisconnectActive => {
                             if let Some(target) = target_for_ui.write().await.take() {
+                                let brand = crate::get_brand();
                                 let _ = outbound_for_ui.send(SignalMessage::Disconnect {
                                     target_id: target,
-                                    reason: "El usuario ha cerrado la sesión de WolfDesk.".to_string(),
+                                    reason: format!("El usuario ha cerrado la sesión de {}.", brand.app_name),
                                 });
                             }
                         }
@@ -466,9 +492,10 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                         }
 
                         UiToNet::RejectIncoming { from_id } => {
+                            let brand = crate::get_brand();
                             let _ = outbound_for_ui.send(SignalMessage::ConnectReject {
                                 from_id,
-                                reason: "El usuario remoto rechazó la sesión de WolfDesk.".to_string(),
+                                reason: format!("El usuario remoto rechazó la sesión de {}.", brand.app_name),
                             });
                         }
 
@@ -668,7 +695,8 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                         }
 
                         if auto_accept {
-                            log::info!("Acceso desatendido WolfDesk autorizado para [{}]", target_id);
+                            let brand = crate::get_brand();
+                            log::info!("Acceso desatendido {} autorizado para [{}]", brand.app_name, target_id);
                             *active_ctrl_from_net.write().await = Some(target_id.clone());
                             *active_perm_from_net.write().await = cfg.default_permissions;
                             let _ = outbound_auto_accept.send(SignalMessage::ConnectAccept {
@@ -677,7 +705,7 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                             });
                             let _ = tx_ui_notify.send(NetToUi::SessionAccepted(target_id));
                         } else {
-                            log::info!("🔔 [SESIÓN ENTRANTE] Solicitud de conexión desde [{}]. Presione '🟢 ACEPTAR' en la pantalla de Linux.", target_id);
+                            log::info!("🔔 [SESIÓN ENTRANTE] Solicitud de conexión desde [{}]. Presione '🟢 ACEPTAR'.", target_id);
                             let _ = tx_ui_notify.send(NetToUi::IncomingRequest(target_id));
                         }
                     }
@@ -688,7 +716,7 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                         let _ = tx_ui_notify.send(NetToUi::SessionAccepted(from_id.clone()));
 
                         if !crate::viewer::VIEWER_IS_OPEN.load(std::sync::atomic::Ordering::SeqCst) {
-                            let (f_tx, f_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+                            let (f_tx, f_rx) = std::sync::mpsc::channel::<crate::viewer::ViewerMessage>();
                             *viewer_tx_clone.lock().unwrap() = Some(f_tx);
 
                             let is_view_only = *active_view_only_for_accept.read().await;
@@ -696,10 +724,11 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                             let init_scale = *active_client_scale_for_accept.read().await;
                             let init_fps = *active_client_fps_for_accept.read().await;
 
+                            let brand = crate::get_brand();
                             let title = if is_view_only {
-                                format!("🐺 WolfDesk - Sesión con [{}] [👁️ ESPECTADOR]", from_id)
+                                format!("{} {} - Sesión con [{}] [👁️ ESPECTADOR]", brand.icon_symbol, brand.app_name, from_id)
                             } else {
-                                format!("🐺 WolfDesk - Sesión Activa con [{}]", from_id)
+                                format!("{} {} - Sesión Activa con [{}]", brand.icon_symbol, brand.app_name, from_id)
                             };
                             let ctrl_tx = viewer_ctrl_tx_clone.clone();
                             let ui_tx = tx_ui_notify.clone();
@@ -707,7 +736,8 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                                 start_viewer_window(&title, f_rx, ctrl_tx, ui_tx, is_view_only, init_q, init_scale, init_fps);
                             });
                         } else {
-                            log::info!("🐺 [RECONECTADO] El visor ya está abierto para [{}]. Reanudando fotogramas...", from_id);
+                            let brand = crate::get_brand();
+                            log::info!("{} [RECONECTADO] El visor ya está abierto para [{}]. Reanudando fotogramas...", brand.icon_symbol, from_id);
                         }
                     }
 
@@ -773,7 +803,7 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                         use base64::Engine;
                         if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(jpeg_base64) {
                             if let Some(ref s) = *viewer_tx_clone.lock().unwrap() {
-                                let _ = s.send(bytes);
+                                let _ = s.send(crate::viewer::ViewerMessage::Frame(bytes));
                             }
                         }
                     }
@@ -789,20 +819,29 @@ pub fn run_desktop_app() -> Result<(), eframe::Error> {
                         match &event {
                             ControlEvent::SetQuality { quality } => {
                                 *quality_on_host.write().await = *quality;
-                                println!(">> [WOLFDESK HOST] Calidad de captura ajustada dinámicamente a {}%", quality);
+                                println!(">> [HOST] Calidad de captura ajustada dinámicamente a {}%", quality);
                             }
                             ControlEvent::SelectDisplay { display_id } => {
                                 *display_on_host.write().await = *display_id;
-                                println!(">> [WOLFDESK HOST] Monitor activo para streaming seleccionado: Pantalla {}", display_id);
+                                println!(">> [HOST] Monitor activo para streaming seleccionado: Pantalla {}", display_id);
                             }
                             ControlEvent::SetFpsLimit { fps } => {
                                 *fps_limit_on_host.write().await = *fps;
-                                println!(">> [WOLFDESK HOST] Límite de FPS ajustado a {}", fps);
+                                println!(">> [HOST] Límite de FPS ajustado a {}", fps);
+                            }
+                            ControlEvent::MonitorsInfo { total_displays, active_display, names } => {
+                                if let Some(ref s) = *viewer_tx_clone.lock().unwrap() {
+                                    let _ = s.send(crate::viewer::ViewerMessage::DisplayInfo {
+                                        total_displays: *total_displays,
+                                        active_display: *active_display,
+                                        names: names.clone(),
+                                    });
+                                }
                             }
                             _ => {
                                 static LOG_CTRL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
                                 if !LOG_CTRL.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                                    log::info!("🎮 [WOLFDESK HOST] Recibiendo eventos de control remoto desde el visor...");
+                                    log::info!("🎮 [HOST] Recibiendo eventos de control remoto desde el visor...");
                                 }
                                 let perms = *active_perm_from_net.read().await;
                                 dispatch_event_with_permissions(&event, &perms);

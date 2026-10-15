@@ -18,6 +18,17 @@ use windows::Win32::{
 
 const TOOLBAR_HEIGHT: usize = 38;
 
+/// Mensajes internos hacia la ventana del visor (fotogramas y metadatos de monitores)
+#[derive(Clone, Debug)]
+pub enum ViewerMessage {
+    Frame(Vec<u8>),
+    DisplayInfo {
+        total_displays: u8,
+        active_display: u8,
+        names: Vec<String>,
+    },
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ScaleAdaptation {
     AspectRatioFit, // Proporción nativa perfecta con barras oscuras (Recomendado)
@@ -374,8 +385,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 return LRESULT(1);
             }
 
-            // 3. Teclas de función del visor (F1..F5, F9): permitir que lleguen a la ventana minifb
-            if matches!(kbd.vkCode, 0x70 | 0x71 | 0x72 | 0x73 | 0x74 | 0x78) {
+            // 3. Teclas de función del visor (F1..F5, F7..F9): permitir que lleguen a la ventana minifb
+            if matches!(kbd.vkCode, 0x70 | 0x71 | 0x72 | 0x73 | 0x74 | 0x76 | 0x77 | 0x78) {
                 return CallNextHookEx(HHOOK(0), n_code, wparam, lparam);
             }
 
@@ -401,7 +412,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 0x08 /* Backspace */ | 0x09 /* Tab */ | 0x0D /* Enter */ | 0x1B /* Esc */
                 | 0x20 /* Space */ | 0x21 /* PageUp */ | 0x22 /* PageDown */ | 0x23 /* End */
                 | 0x24 /* Home */ | 0x25..=0x28 /* Arrows */ | 0x2D /* Insert */ | 0x2E /* Delete */
-                | 0x75..=0x77 /* F6-F8 */ | 0x79..=0x7B /* F10-F12 */
+                | 0x75 /* F6 */ | 0x79..=0x7B /* F10-F12 */
             );
 
             // Verificar si Ctrl o Alt están activos para atajos estándar (Ctrl+C, Ctrl+V, Alt+Tab, etc.)
@@ -449,9 +460,52 @@ unsafe extern "system" fn low_level_keyboard_proc(
 pub static VIEWER_IS_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static HOOK_VIEW_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+fn next_display(current: u8, total: u8) -> u8 {
+    let max_disp = total.max(1);
+    if max_disp <= 1 {
+        if current == 1 { 0 } else { 1 }
+    } else if current == 0 {
+        1
+    } else if current < max_disp {
+        current + 1
+    } else {
+        0
+    }
+}
+
+fn prev_display(current: u8, total: u8) -> u8 {
+    let max_disp = total.max(1);
+    if max_disp <= 1 {
+        if current == 1 { 0 } else { 1 }
+    } else if current == 0 {
+        max_disp
+    } else if current == 1 {
+        0
+    } else {
+        current - 1
+    }
+}
+
+fn format_hud_display(display_id: u8, total: u8, names: &[String]) -> String {
+    if display_id == 0 {
+        if total > 1 {
+            format!("Todas las pantallas ({} monitores)", total)
+        } else {
+            "Escritorio completo (Virtual)".to_string()
+        }
+    } else {
+        let name_suffix = if let Some(n) = names.get((display_id - 1) as usize) {
+            format!(": {}", n)
+        } else {
+            String::new()
+        };
+        format!("Pantalla {} de {}{}", display_id, total.max(1), name_suffix)
+    }
+}
+
 pub fn start_viewer_window(
     title: &str,
-    frame_rx: mpsc::Receiver<Vec<u8>>,
+    frame_rx: mpsc::Receiver<ViewerMessage>,
     control_tx: tokio::sync::mpsc::UnboundedSender<ControlEvent>,
     tx_to_ui: std::sync::mpsc::Sender<crate::dashboard::NetToUi>,
     initial_view_only: bool,
@@ -517,6 +571,8 @@ pub fn start_viewer_window(
     let mut recorder = SessionRecorder::new();
     let mut f9_was_pressed = false;
     let mut f5_was_pressed = false;
+    let mut f7_was_pressed = false;
+    let mut f8_was_pressed = false;
     let mut last_frame_time = std::time::Instant::now();
     let mut had_first_frame = false;
 
@@ -540,6 +596,9 @@ pub fn start_viewer_window(
         _ => ScaleAdaptation::Original100,
     };
     let mut current_display = 1u8; // Pantalla 1 por defecto
+    let mut total_displays = 1u8;
+    let mut display_names: Vec<String> = Vec::new();
+    let mut last_hud_message: Option<(std::time::Instant, String)> = None;
     let mut show_toolbar = true;
 
     // Notificar al Host las preferencias de calidad y límite de ancho de banda iniciales
@@ -552,8 +611,8 @@ pub fn start_viewer_window(
     println!("\n============================================================");
     println!(" {} [VISOR {} HD - RENDIMIENTO TOTAL]", brand.icon_symbol, brand.app_name.to_uppercase());
     println!(" • Barra superior interactiva disponible:");
-    println!("   [Calidad], [Escala], [Grabar], [Win Key], [Ocultar], [Salir]");
-    println!(" • Atajos de teclado: [F1-F4 Calidad], [F5 Escala], [F9 Grabar]");
+    println!("   [Pantalla: F7/F8], [Calidad: F1-F4], [Escala: F5], [Grabar: F9], [Archivos], [Modo], [Win Key]");
+    println!(" • Atajos de teclado: [F7/F8 Cambiar Monitor], [F1-F4 Calidad], [F5 Escala], [F9 Grabar]");
     println!(" • Tecla Windows y eliminación continua de teclado habilitadas");
     println!("============================================================");
 
@@ -588,6 +647,29 @@ pub fn start_viewer_window(
         }
         f5_was_pressed = f5_down;
 
+        // 2b. Hotkeys de Selección de Monitor (F7: Anterior, F8: Siguiente)
+        let f7_down = window.is_key_down(Key::F7);
+        if f7_down && !f7_was_pressed {
+            current_display = prev_display(current_display, total_displays);
+            let _ = control_tx.send(ControlEvent::SelectDisplay { display_id: current_display });
+            last_hud_message = Some((
+                std::time::Instant::now(),
+                format_hud_display(current_display, total_displays, &display_names),
+            ));
+        }
+        f7_was_pressed = f7_down;
+
+        let f8_down = window.is_key_down(Key::F8);
+        if f8_down && !f8_was_pressed {
+            current_display = next_display(current_display, total_displays);
+            let _ = control_tx.send(ControlEvent::SelectDisplay { display_id: current_display });
+            last_hud_message = Some((
+                std::time::Instant::now(),
+                format_hud_display(current_display, total_displays, &display_names),
+            ));
+        }
+        f8_was_pressed = f8_down;
+
         // 3. Hotkey de Grabación (F9)
         let f9_down = window.is_key_down(Key::F9);
         if f9_down && !f9_was_pressed {
@@ -599,11 +681,24 @@ pub fn start_viewer_window(
         }
         f9_was_pressed = f9_down;
 
-        // 4. Procesar fotogramas recibidos del host
+        // 4. Procesar fotogramas y eventos de pantalla recibidos del host
         let mut latest_frame: Option<Vec<u8>> = None;
-        while let Ok(jpeg_bytes) = frame_rx.try_recv() {
-            recorder.record_frame(&jpeg_bytes);
-            latest_frame = Some(jpeg_bytes);
+        while let Ok(msg) = frame_rx.try_recv() {
+            match msg {
+                ViewerMessage::Frame(jpeg_bytes) => {
+                    recorder.record_frame(&jpeg_bytes);
+                    latest_frame = Some(jpeg_bytes);
+                }
+                ViewerMessage::DisplayInfo { total_displays: total, active_display: active, names } => {
+                    total_displays = total.max(1);
+                    current_display = active;
+                    display_names = names;
+                    last_hud_message = Some((
+                        std::time::Instant::now(),
+                        format_hud_display(current_display, total_displays, &display_names),
+                    ));
+                }
+            }
         }
 
         if let Some(jpeg_bytes) = latest_frame {
@@ -746,15 +841,15 @@ pub fn start_viewer_window(
         }
 
         // 8. Botones de la barra superior (Coordenadas cliente exactas)
-        let btn_pantalla_rect = (10, 6, 120, 26);
-        let btn_calidad_rect = (136, 6, 175, 26);
-        let btn_escala_rect = (317, 6, 145, 26);
-        let btn_grabar_rect = (468, 6, 115, 26);
-        let btn_archivos_rect = (589, 6, 95, 26);
-        let btn_modo_rect = (690, 6, 115, 26);
-        let btn_win_rect = (811, 6, 80, 26);
-        let btn_ocultar_rect = (897, 6, 75, 26);
-        let btn_salir_rect = (978, 6, 70, 26);
+        let btn_pantalla_rect = (10, 6, 125, 26);
+        let btn_calidad_rect = (141, 6, 172, 26);
+        let btn_escala_rect = (319, 6, 145, 26);
+        let btn_grabar_rect = (470, 6, 115, 26);
+        let btn_archivos_rect = (591, 6, 95, 26);
+        let btn_modo_rect = (692, 6, 115, 26);
+        let btn_win_rect = (813, 6, 80, 26);
+        let btn_ocultar_rect = (899, 6, 75, 26);
+        let btn_salir_rect = (980, 6, 70, 26);
         let btn_mostrar_rect = (10, 4, 85, 26);
 
         let is_in = |rect: (usize, usize, usize, usize)| {
@@ -797,8 +892,12 @@ pub fn start_viewer_window(
         if left_just_pressed {
             if show_toolbar && is_over_toolbar {
                 if is_in(btn_pantalla_rect) {
-                    current_display = (current_display + 1) % 4; // 1 -> 2 -> 3 -> 0 (Todas) -> 1
+                    current_display = next_display(current_display, total_displays);
                     let _ = control_tx.send(ControlEvent::SelectDisplay { display_id: current_display });
+                    last_hud_message = Some((
+                        std::time::Instant::now(),
+                        format_hud_display(current_display, total_displays, &display_names),
+                    ));
                 } else if is_in(btn_calidad_rect) {
                     quality_tier = (quality_tier + 1) % 4;
                     let (q, lbl) = match quality_tier {
@@ -927,7 +1026,13 @@ pub fn start_viewer_window(
             }
 
             let pant_label = if current_display == 0 {
-                "Pant: Todas".to_string()
+                if total_displays > 1 {
+                    format!("Pant: Todas ({})", total_displays)
+                } else {
+                    "Pant: Todas".to_string()
+                }
+            } else if total_displays > 1 {
+                format!("Pantalla: {}/{}", current_display, total_displays)
             } else {
                 format!("Pantalla: {}", current_display)
             };
@@ -962,6 +1067,18 @@ pub fn start_viewer_window(
             draw_button(&mut buffer, client_w, client_h, btn_mostrar_rect, "Menú", is_over_mini_menu, false, 0);
         }
 
+        // Cartel flotante (HUD) informativo al cambiar de monitor
+        if let Some((time, ref text)) = last_hud_message {
+            if time.elapsed() < Duration::from_millis(2200) {
+                let text_w = measure_text(text);
+                let bw = (text_w + 32).max(220);
+                let bh = 28;
+                let bx = if client_w > bw { (client_w - bw) / 2 } else { 10 };
+                let by = if show_toolbar { TOOLBAR_HEIGHT + 8 } else { 8 };
+                draw_button(&mut buffer, client_w, client_h, (bx, by, bw, bh), text, false, true, 0x0284C7);
+            }
+        }
+
         let is_reconnecting = had_first_frame && last_frame_time.elapsed() > Duration::from_secs(4);
         if is_reconnecting {
             let elapsed = last_frame_time.elapsed().as_secs();
@@ -969,7 +1086,7 @@ pub fn start_viewer_window(
             let bw = 380;
             let bh = 28;
             let bx = if client_w > bw { (client_w - bw) / 2 } else { 10 };
-            let by = TOOLBAR_HEIGHT + 8;
+            let by = TOOLBAR_HEIGHT + 40;
             draw_button(&mut buffer, client_w, client_h, (bx, by, bw, bh), &banner_txt, false, false, 0x0EA5E9);
         }
 
@@ -982,7 +1099,7 @@ pub fn start_viewer_window(
         if need_minifb_keys {
             let pressed_keys = window.get_keys_pressed(KeyRepeat::Yes);
             for key in pressed_keys {
-                if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
+                if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F7 | Key::F8 | Key::F9) {
                     continue;
                 }
                 if !is_view_only {
@@ -997,7 +1114,7 @@ pub fn start_viewer_window(
 
             let released_keys = window.get_keys_released();
             for key in released_keys {
-                if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F9) {
+                if matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F7 | Key::F8 | Key::F9) {
                     continue;
                 }
                 if !is_view_only {

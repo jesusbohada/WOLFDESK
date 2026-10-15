@@ -166,6 +166,13 @@ pub enum ControlEvent {
     SelectDisplay {
         display_id: u8,
     },
+    /// Información sobre los monitores disponibles en el host
+    MonitorsInfo {
+        total_displays: u8,
+        active_display: u8,
+        #[serde(default)]
+        names: Vec<String>,
+    },
     ClipboardSync {
         text: String,
     },

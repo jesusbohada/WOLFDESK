@@ -246,6 +246,7 @@ pub fn dispatch_event_with_permissions(event: &ControlEvent, permissions: &Sessi
         }
 
         ControlEvent::SelectDisplay { .. }
+        | ControlEvent::MonitorsInfo { .. }
         | ControlEvent::SetFpsLimit { .. }
         | ControlEvent::SetQuality { .. }
         | ControlEvent::Ping { .. }
