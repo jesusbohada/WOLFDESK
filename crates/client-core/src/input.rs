@@ -38,7 +38,16 @@ fn get_active_bounds() -> (i32, i32, i32, i32) {
         let sh = if phys_h > 0 { phys_h } else { GetSystemMetrics(SM_CYSCREEN) };
         (0, 0, sw, sh)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(guard) = LINUX_INPUT_CTX.lock() {
+            if let Some(ref ctx) = *guard {
+                return (0, 0, ctx.screen_w as i32, ctx.screen_h as i32);
+            }
+        }
+        (0, 0, 1920, 1080)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     (0, 0, 1920, 1080)
 }
 
@@ -340,8 +349,9 @@ fn dispatch_linux_input_event(event: &ControlEvent, permissions: &SessionPermiss
             if !permissions.allow_mouse {
                 return;
             }
-            let target_x = (x.clamp(0.0, 1.0) * (ctx.screen_w - 1.0)).round() as i16;
-            let target_y = (y.clamp(0.0, 1.0) * (ctx.screen_h - 1.0)).round() as i16;
+            let (origin_x, origin_y, bounds_w, bounds_h) = get_active_bounds();
+            let target_x = origin_x as i16 + (x.clamp(0.0, 1.0) * (bounds_w - 1) as f32).round() as i16;
+            let target_y = origin_y as i16 + (y.clamp(0.0, 1.0) * (bounds_h - 1) as f32).round() as i16;
 
             // 1. Mover el cursor directamente en el servidor X11
             let _ = ctx.conn.warp_pointer(x11rb::NONE, ctx.root, 0, 0, 0, 0, target_x, target_y);
@@ -355,8 +365,9 @@ fn dispatch_linux_input_event(event: &ControlEvent, permissions: &SessionPermiss
                 return;
             }
             if let (Some(px), Some(py)) = (x, y) {
-                let target_x = (px.clamp(0.0, 1.0) * (ctx.screen_w - 1.0)).round() as i16;
-                let target_y = (py.clamp(0.0, 1.0) * (ctx.screen_h - 1.0)).round() as i16;
+                let (origin_x, origin_y, bounds_w, bounds_h) = get_active_bounds();
+                let target_x = origin_x as i16 + (px.clamp(0.0, 1.0) * (bounds_w - 1) as f32).round() as i16;
+                let target_y = origin_y as i16 + (py.clamp(0.0, 1.0) * (bounds_h - 1) as f32).round() as i16;
                 let _ = ctx.conn.warp_pointer(x11rb::NONE, ctx.root, 0, 0, 0, 0, target_x, target_y);
                 let _ = ctx.conn.xtest_fake_input(6, 0, 0, ctx.root, target_x, target_y, 0);
             }
@@ -396,6 +407,15 @@ fn dispatch_linux_input_event(event: &ControlEvent, permissions: &SessionPermiss
             } else {
                 log::warn!("⚠️ [INPUT TECLADO] Tecla VK 0x{:X} no mapeada a código de tecla Linux", vk_code);
             }
+        }
+
+        ControlEvent::KeyboardUnicode { text } => {
+            if !permissions.allow_keyboard {
+                return;
+            }
+            let _ = std::process::Command::new("xdotool")
+                .args(["type", "--clearmodifiers", "--", text])
+                .spawn();
         }
 
         _ => {}

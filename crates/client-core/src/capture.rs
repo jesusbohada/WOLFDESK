@@ -94,8 +94,87 @@ pub fn enumerate_monitors() -> Vec<MonitorBounds> {
 }
 
 #[cfg(target_os = "linux")]
+fn parse_xrandr_geom(token: &str) -> Option<(i32, i32, i32, i32)> {
+    let parts: Vec<&str> = token.split('+').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let res_parts: Vec<&str> = parts[0].split('x').collect();
+    if res_parts.len() != 2 {
+        return None;
+    }
+    let w: i32 = res_parts[0].parse().ok()?;
+    let h: i32 = res_parts[1].parse().ok()?;
+    let x: i32 = parts[1].parse().ok()?;
+    let y: i32 = parts[2].parse().ok()?;
+    if w > 0 && h > 0 {
+        Some((x, y, w, h))
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn enumerate_monitors_xrandr() -> Option<Vec<MonitorBounds>> {
+    let output = std::process::Command::new("xrandr")
+        .arg("--current")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut monitors = Vec::new();
+    let mut id_counter = 1u8;
+
+    for line in text.lines() {
+        if line.contains(" connected ") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let name = parts[0].to_string();
+                let is_primary = line.contains(" primary ");
+
+                for token in &parts[2..] {
+                    if let Some(bounds) = parse_xrandr_geom(token) {
+                        let display_name = if is_primary {
+                            format!("Pantalla {} - {} (Principal)", id_counter, name)
+                        } else {
+                            format!("Pantalla {} - {}", id_counter, name)
+                        };
+                        monitors.push(MonitorBounds {
+                            id: id_counter,
+                            name: display_name,
+                            x: bounds.0,
+                            y: bounds.1,
+                            width: bounds.2,
+                            height: bounds.3,
+                            is_primary,
+                        });
+                        id_counter += 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if monitors.is_empty() {
+        None
+    } else {
+        Some(monitors)
+    }
+}
+
+#[cfg(target_os = "linux")]
 pub fn enumerate_monitors() -> Vec<MonitorBounds> {
     ensure_linux_x11_auth();
+    if let Some(monitors) = enumerate_monitors_xrandr() {
+        if !monitors.is_empty() {
+            return monitors;
+        }
+    }
     let mut monitors = Vec::new();
     if let Ok((conn, screen_num)) = x11rb::connect(None) {
         let setup = conn.setup();
@@ -253,6 +332,27 @@ impl ScreenCapturer {
                     self.screen_w = vw;
                     self.screen_h = vh;
                     calculated = true;
+                }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                if let Ok((conn, screen_num)) = x11rb::connect(None) {
+                    let setup = conn.setup();
+                    if let Some(screen) = setup.roots.get(screen_num) {
+                        let mut w = screen.width_in_pixels as i32;
+                        let mut h = screen.height_in_pixels as i32;
+                        if let Ok(geom) = conn.get_geometry(screen.root).and_then(|c| c.reply()) {
+                            w = geom.width as i32;
+                            h = geom.height as i32;
+                        }
+                        if w > 0 && h > 0 {
+                            self.capture_x = 0;
+                            self.capture_y = 0;
+                            self.screen_w = w;
+                            self.screen_h = h;
+                            calculated = true;
+                        }
+                    }
                 }
             }
         } else if let Some(mon) = self.monitors.iter().find(|m| m.id == self.selected_display) {
@@ -436,29 +536,26 @@ impl ScreenCapturer {
                 }
             }
 
-            self.screen_w = scr_w;
-            self.screen_h = scr_h;
-
-            if self.screen_w <= 0 || self.screen_h <= 0 {
-                log::error!("❌ [CAPTURA X11] Dimensiones de pantalla no válidas: {}x{}", self.screen_w, self.screen_h);
-                return None;
-            }
+            let cap_x = self.capture_x.max(0) as i16;
+            let cap_y = self.capture_y.max(0) as i16;
+            let cap_w = self.screen_w.min(scr_w.saturating_sub(cap_x as i32)).max(1) as u16;
+            let cap_h = self.screen_h.min(scr_h.saturating_sub(cap_y as i32)).max(1) as u16;
 
             let (target_w, target_h) = if quality <= 45 {
-                let max_w = 1280.min(self.screen_w);
-                let max_h = (max_w as f32 * (self.screen_h as f32 / self.screen_w as f32)) as i32;
+                let max_w = 1280.min(cap_w as i32);
+                let max_h = (max_w as f32 * (cap_h as f32 / cap_w as f32)) as i32;
                 (max_w, max_h)
             } else {
-                (self.screen_w, self.screen_h)
+                (cap_w as i32, cap_h as i32)
             };
 
             let reply = match conn.get_image(
                 ImageFormat::Z_PIXMAP,
                 root,
-                0,
-                0,
-                self.screen_w as u16,
-                self.screen_h as u16,
+                cap_x,
+                cap_y,
+                cap_w,
+                cap_h,
                 !0,
             ) {
                 Ok(cookie) => match cookie.reply() {
@@ -481,7 +578,7 @@ impl ScreenCapturer {
             };
 
             let raw_data = reply.data;
-            let total_pixels = (self.screen_w * self.screen_h) as usize;
+            let total_pixels = (cap_w as usize) * (cap_h as usize);
             if raw_data.is_empty() {
                 return None;
             }
@@ -506,7 +603,7 @@ impl ScreenCapturer {
             }
 
             let mut rgb_pixels = Vec::with_capacity((target_w * target_h * 3) as usize);
-            if target_w == self.screen_w && target_h == self.screen_h {
+            if target_w == cap_w as i32 && target_h == cap_h as i32 {
                 for chunk in raw_data.chunks_exact(bpp) {
                     rgb_pixels.push(chunk[2]); // R (desde byte 2 de BGRA)
                     rgb_pixels.push(chunk[1]); // G (desde byte 1 de BGRA)
@@ -519,7 +616,7 @@ impl ScreenCapturer {
                     full_rgb.push(chunk[1]);
                     full_rgb.push(chunk[0]);
                 }
-                if let Some(src_img) = image::RgbImage::from_raw(self.screen_w as u32, self.screen_h as u32, full_rgb) {
+                if let Some(src_img) = image::RgbImage::from_raw(cap_w as u32, cap_h as u32, full_rgb) {
                     let resized = image::imageops::resize(&src_img, target_w as u32, target_h as u32, image::imageops::FilterType::Nearest);
                     rgb_pixels = resized.into_raw();
                 } else {

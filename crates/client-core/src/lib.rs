@@ -120,6 +120,41 @@ pub fn restart_application() {
         }
     }
 
+    #[cfg(not(windows))]
+    {
+        if let Ok(mut exe) = std::env::current_exe() {
+            let official_bin = brand.unix_bin_name;
+            if let Some(file_name) = exe.file_name().and_then(|n| n.to_str()) {
+                if file_name.contains(".old") {
+                    exe.set_file_name(official_bin);
+                }
+            }
+            let exe_str = exe.to_string_lossy().to_string();
+            let parent_dir = exe.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            let current_pid = std::process::id();
+
+            let display_env = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+            let xauth_env = std::env::var("XAUTHORITY").unwrap_or_default();
+
+            let restart_script = format!(
+                "sleep 1; \
+                 while kill -0 {pid} 2>/dev/null; do kill -9 {pid} 2>/dev/null || true; sleep 0.2; done; \
+                 export DISPLAY='{disp}'; \
+                 {xauth_export} \
+                 cd '{parent}' && nohup '{exe}' >/dev/null 2>&1 &",
+                pid = current_pid,
+                disp = display_env,
+                xauth_export = if !xauth_env.is_empty() { format!("export XAUTHORITY='{}';", xauth_env) } else { String::new() },
+                parent = parent_dir,
+                exe = exe_str
+            );
+
+            let _ = std::process::Command::new("sh")
+                .args(["-c", &restart_script])
+                .spawn();
+        }
+    }
+
     std::process::exit(0);
 }
 
